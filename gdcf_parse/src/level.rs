@@ -65,14 +65,17 @@ pub fn level_password(encrypted: &str) -> Result<Password, DecodeError> {
     match encrypted {
         "0" => Ok(Password::NoCopy),
         pass => {
-            let decoded = b64_decode_string(pass)?;
-            let mut decrypted = xor_decrypt(&decoded, "26364");
 
-            if decrypted.len() == 1 {
+            let mut pass_str = pass.to_owned();
+            // on 1.9 passwords aren't encoded
+            // let decoded = b64_decode_string(pass)?;
+            //let mut decrypted = xor_decrypt(&decoded, "26364");
+
+            if pass_str.len() == 1 {
                 Ok(Password::FreeCopy)
             } else {
-                decrypted.remove(0);
-                Ok(Password::PasswordCopy(decrypted))
+                pass_str.remove(0);
+                Ok(Password::PasswordCopy(pass_str))
             }
         },
     }

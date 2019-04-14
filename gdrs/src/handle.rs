@@ -19,7 +19,7 @@ pub trait Handler: GdcfRequest {
 
 impl Handler for LevelRequest {
     fn endpoint() -> &'static str {
-        endpoint!("downloadGJLevel22")
+        endpoint!("downloadGJLevel19")
     }
 
     fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
@@ -40,7 +40,7 @@ impl Handler for LevelRequest {
 
 impl Handler for LevelsRequest {
     fn endpoint() -> &'static str {
-        endpoint!("getGJLevels21")
+        endpoint!("getGJLevels19")
     }
 
     fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
