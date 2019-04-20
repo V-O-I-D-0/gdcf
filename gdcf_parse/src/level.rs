@@ -36,7 +36,7 @@ pub fn parse_description(value: &str) -> Option<String> {
     // parase
 
     // they break if they have punctuation so
-    String::from_utf8(base64::decode(value).unwrap())
+    Ok(String::from_utf8(base64::decode(value).unwrap()))
 }
 
 pub fn parse_featured(value: &str) -> Result<Featured, ParseIntError> {
