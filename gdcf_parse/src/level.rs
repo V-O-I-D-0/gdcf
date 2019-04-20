@@ -32,11 +32,8 @@ pub fn process_song(main_song: usize, custom_song: &Option<u64>) -> Option<&'sta
 }
 
 pub fn parse_description(value: &str) -> Option<String> {
-    // I have decided that level descriptions are so broken that we simply ignore it if they fail to
-    // parase
-
-    // they break if they have punctuation so
-    String::from_utf8(base64::decode(value).unwrap()).ok()
+    // i mean like, yes?
+    Some(value.to_string())
 }
 
 pub fn parse_featured(value: &str) -> Result<Featured, ParseIntError> {
