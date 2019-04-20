@@ -1,6 +1,6 @@
 use crate::error::ValueError;
 use base64::{DecodeError, URL_SAFE};
-use percent_encoding::percent_decode;
+use percent_encoding::{percent_decode, percent_encode, DEFAULT_ENCODE_SET};
 use std::{
     error::Error,
     str::{FromStr, Utf8Error},
@@ -52,6 +52,15 @@ pub const fn int_to_bool(value: u8) -> bool {
 
 pub fn into_option<T>(value: T) -> Option<T> {
     Some(value)
+}
+
+/// Encodes string into percent-encode
+/// # Errors
+/// idk
+pub fn encode_url(decoded: &str) -> Result<String, Utf8Error> {
+    let utf8_cow = percent_encode(decoded.as_bytes(), DEFAULT_ENCODE_SET);
+
+    Ok(utf8_cow.to_string())
 }
 
 /// Takes a percent-encoded URL and decodes it

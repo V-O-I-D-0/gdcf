@@ -1,6 +1,6 @@
 use crate::{
     error::ValueError,
-    util::{b64_decode_bytes, b64_decode_string, default_to_none, int_to_bool, xor_decrypt},
+    util::{b64_decode_bytes, b64_decode_string, default_to_none, int_to_bool, xor_decrypt, encode_url},
     Parse,
 };
 use base64::DecodeError;
@@ -33,7 +33,10 @@ pub fn process_song(main_song: usize, custom_song: &Option<u64>) -> Option<&'sta
 
 pub fn parse_description(value: &str) -> Option<String> {
     // i mean like, yes?
-    Some(value.to_string())
+    match b64_decode_string(&encode_url(value).unwrap()) {
+        Err(_e) => Some(value.to_string()),
+        Ok(f) => Some(f)
+    }
 }
 
 pub fn parse_featured(value: &str) -> Result<Featured, ParseIntError> {
