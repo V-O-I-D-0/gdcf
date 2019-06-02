@@ -148,17 +148,28 @@ parser! {
         id(index = 1),
         x(index = 2),
         y(index = 3),
-        flipped_y(index = 4, optional),
-        flipped_x(index = 5, optional),
-        rotation(index = 6, optional),
+        flipped_y(index = 4),
+        flipped_x(index = 5),
+        rotation(index = 6),
         // ... all the other fields ...
         metadata(delegate),
     }
 }
 
+fn parse_starting_speed(speed: u8) -> Speed {
+    match speed {
+        0 => Speed::Slow,
+        1 => Speed::Normal,
+        2 => Speed::Medium,
+        3 => Speed::Fast,
+        4 => Speed::VeryFast,
+        _ => Speed::Invalid,
+    }
+}
+
 parser! {
     LevelMetadata => {
-        starting_speed(index = kA4),
+        starting_speed(index = kA4, with = parse_starting_speed),
         // ... all the other fields ...
     }
 }

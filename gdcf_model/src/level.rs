@@ -199,6 +199,8 @@ pub enum Password {
     PasswordCopy(String),
 }
 
+// TODO: figure out a way to make the raw_type annotation not take the type by string.
+
 /// Struct representing partial levels. These are returned to
 /// [`LevelsRequest`](::api::request::level::LevelsRequest)s and only
 /// contain metadata
@@ -384,39 +386,22 @@ where
     ///
     /// ## GD Internals:
     /// This value is provided at index `45`, although only for levels uploaded
-    /// in version 2.1 or later. For all older levels this is always `None`
-    pub object_amount: Option<u32>,
+    /// in version 2.1 or later. For all older levels this is always `0`
+    pub object_amount: u32,
 
     /// According to the GDPS source this is always `1`, although that is
     /// evidently wrong
     ///
     /// ## GD Internals:
     /// This value is provided at index `46` and seems to be an integer
-    pub index_46: Option<String>,
+    pub index_46: String,
 
     /// According to the GDPS source, this is always `2`, although that is
     /// evidently wrong
     ///
     /// ## GD Internals:
     /// This value is provided at index `47` and seems to be an integer
-    pub index_47: Option<String>,
-}
-
-impl<Song: PartialEq, User: PartialEq> PartialLevel<Song, User> {
-    pub fn is_auto(&self) -> bool {
-        self.difficulty == LevelRating::Auto
-    }
-
-    pub fn is_na(&self) -> bool {
-        self.difficulty == LevelRating::NotAvailable
-    }
-
-    pub fn is_demon(&self) -> bool {
-        match self.difficulty {
-            LevelRating::Demon(_) => true,
-            _ => false,
-        }
-    }
+    pub index_47: String,
 }
 
 /// Struct representing full levels, extending [`PartialLevel`] with the fields
@@ -461,7 +446,7 @@ where
     /// copyable + Otherwise the value is base64 encoded and "encrypted"
     /// using robtop's XOR routine using key `26364`. If the "decrypted"
     /// value is `"1"`, the level is free to
-    /// copy. Otherwise the decrypted value (minus the first char) is the level password.
+    /// copy. Otherwise the decrypted value is the level password.
     pub password: Password,
 
     /// The time passed since the `Level` was uploaded

@@ -1,12 +1,8 @@
 //! Crate containing parsers for various Geometry Dash related data
 //!
 //! This crate is based on work by mgostIH and cos8o
-#![feature(trace_macros)]
-
-//trace_macros!(true);
 
 use crate::{error::ValueError, util::SelfZipExt};
-use std::collections::HashMap;
 
 #[macro_use]
 extern crate log;
@@ -14,7 +10,6 @@ extern crate log;
 pub mod util;
 #[macro_use]
 pub mod macros;
-pub mod convert;
 pub mod error;
 pub mod level;
 pub mod song;
@@ -31,24 +26,15 @@ pub trait Parse: Sized {
     where
         I: Iterator<Item = (&'a str, &'a str)> + Clone,
         F: FnMut(&'a str, &'a str) -> Result<(), ValueError<'a>>;
-    fn unparse(self) -> HashMap<&'static str, String>;
 
     fn parse_iter<'a>(iter: impl Iterator<Item = &'a str> + Clone) -> Result<Self, ValueError<'a>> {
-        Self::parse(iter.self_zip(), |i, v| {
-            Ok(warn!(
-                "Unused value '{}' at index '{}'. This can and will lead to incorrect .unparse() results",
-                v, i
-            ))
-        })
+        Self::parse(iter.self_zip(), |i, v| Ok(warn!("Unused value '{}' at index '{}'", v, i)))
     }
 
     fn parse_unindexed_iter<'a>(iter: impl Iterator<Item = &'a str> + Clone) -> Result<Self, ValueError<'a>> {
         // well this is a stupid solution
         Self::parse(INDICES.iter().cloned().zip(iter), |i, v| {
-            Ok(warn!(
-                "Unused value '{}' at index '{}'. This can and will lead to incorrect .unparse() results",
-                v, i
-            ))
+            Ok(warn!("Unused value '{}' at index '{}'", v, i))
         })
     }
 

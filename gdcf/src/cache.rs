@@ -1,54 +1,106 @@
-use crate::{api::request::Request, error::CacheError, Secondary};
+use crate::{error::CacheError, Secondary};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use gdcf_model::{song::NewgroundsSong, user::Creator};
+use std::hash::Hash;
+
+pub type Lookup<T, E> = Result<CachedObject<T>, E>;
+
+// TODO: more fine-grained cache-expiry control
+
+pub trait CacheConfig {
+    fn invalidate_after(&self) -> Duration;
+}
 
 pub trait Cache: Clone + Send + Sync + 'static {
-    type CacheEntryMeta: CacheEntryMeta;
+    type Config: CacheConfig;
     type Err: CacheError;
-}
 
-pub trait Lookup<Obj>: Cache {
-    fn lookup(&self, key: u64) -> Result<CacheEntry<Obj, Self>, Self::Err>;
-}
+    fn config(&self) -> &Self::Config;
 
-pub trait Store<Obj>: Cache {
-    fn store(&mut self, obj: &Obj, key: u64) -> Result<Self::CacheEntryMeta, Self::Err>;
-}
+    fn lookup_song(&self, newground_id: u64) -> Lookup<NewgroundsSong, Self::Err>;
+    fn lookup_creator(&self, user_id: u64) -> Lookup<Creator, Self::Err>;
 
-pub trait CanCache<R: Request>: Cache + Lookup<R::Result> + Store<R::Result> {
-    fn lookup_request(&self, request: &R) -> Result<CacheEntry<R::Result, Self>, Self::Err> {
-        self.lookup(request.key())
+    /// Stores an arbitrary [`Secondary`] in this [`Cache`]
+    fn store_secondary(&mut self, obj: &Secondary) -> Result<(), Self::Err>;
+
+    fn hash<H: Hash>(&self, obj: H) -> u64;
+
+    fn is_expired<T>(&self, obj: &CachedObject<T>) -> bool {
+        let now = Utc::now();
+        let then = DateTime::<Utc>::from_utc(obj.last_cached_at(), Utc);
+
+        now - then > self.config().invalidate_after()
     }
 }
 
-impl<R: Request, C: Cache> CanCache<R> for C where C: Lookup<R::Result> + Store<R::Result> {}
-
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub struct CacheEntry<T, C: Cache> {
-    pub object: T,
-    pub metadata: C::CacheEntryMeta,
+pub trait CanCache<R: crate::api::request::Request>: Cache {
+    fn lookup(&self, request: &R) -> Lookup<R::Result, Self::Err>;
+    fn store(&mut self, object: &R::Result, request_hash: u64) -> Result<(), Self::Err>;
 }
 
-impl<T, C: Cache> CacheEntry<T, C> {
-    pub fn new(object: T, metadata: C::CacheEntryMeta) -> Self {
-        Self { object, metadata }
+#[derive(Debug)]
+pub struct CachedObject<T> {
+    first_cached_at: NaiveDateTime,
+    last_cached_at: NaiveDateTime,
+    obj: T,
+}
+
+impl<T> CachedObject<T> {
+    pub fn new(obj: T, first: NaiveDateTime, last: NaiveDateTime) -> Self {
+        CachedObject {
+            first_cached_at: first,
+            last_cached_at: last,
+            obj,
+        }
     }
 
-    pub fn meta(&self) -> &C::CacheEntryMeta {
-        &self.metadata
+    pub fn last_cached_at(&self) -> NaiveDateTime {
+        self.last_cached_at
     }
 
-    pub fn into_inner(self) -> T {
-        self.object
+    pub fn first_cached_at(&self) -> NaiveDateTime {
+        self.first_cached_at
+    }
+
+    pub fn extract(self) -> T {
+        self.obj
     }
 
     pub fn inner(&self) -> &T {
-        &self.object
+        &self.obj
     }
 
-    pub fn is_expired(&self) -> bool {
-        self.metadata.is_expired()
-    }
-}
+    pub(crate) fn map<R, F>(self, f: F) -> CachedObject<R>
+    where
+        F: FnOnce(T) -> R,
+    {
+        let CachedObject {
+            first_cached_at,
+            last_cached_at,
+            obj,
+        } = self;
 
-pub trait CacheEntryMeta: Clone + Send + Sync + 'static {
-    fn is_expired(&self) -> bool;
+        CachedObject {
+            first_cached_at,
+            last_cached_at,
+            obj: f(obj),
+        }
+    }
+
+    pub(crate) fn try_map<R, F, E>(self, f: F) -> Result<CachedObject<R>, E>
+    where
+        F: FnOnce(T) -> Result<R, E>,
+    {
+        let CachedObject {
+            first_cached_at,
+            last_cached_at,
+            obj,
+        } = self;
+
+        Ok(CachedObject {
+            first_cached_at,
+            last_cached_at,
+            obj: f(obj)?,
+        })
+    }
 }

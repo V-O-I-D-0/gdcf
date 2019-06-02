@@ -1,18 +1,16 @@
 pub mod ids;
 pub mod portal;
-pub mod text;
 pub mod trigger;
+pub mod text;
 
 use crate::level::{
-    data::{
-        portal::{PortalData, Speed},
-        text::TextData,
-        trigger::ColorTriggerData,
-    },
+    data::portal::{PortalData, Speed},
     Level,
 };
 use flate2::read::GzDecoder;
 use std::{io::Read, time::Duration};
+use crate::level::data::text::TextData;
+use crate::level::data::trigger::ColorTriggerData;
 
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct LevelMetadata {
@@ -37,7 +35,7 @@ pub enum ObjectData {
     None,
     Portal(PortalData),
     Text(TextData),
-    ColorTrigger(ColorTriggerData),
+    ColorTrigger(ColorTriggerData)
 }
 
 #[derive(Debug, PartialEq, Eq)]

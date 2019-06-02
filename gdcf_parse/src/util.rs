@@ -1,7 +1,4 @@
-use crate::{
-    convert::{RobtopFrom, RobtopInto},
-    error::ValueError,
-};
+use crate::error::ValueError;
 use base64::{DecodeError, URL_SAFE};
 use percent_encoding::{percent_decode, percent_encode, DEFAULT_ENCODE_SET};
 use std::{
@@ -94,7 +91,7 @@ pub fn b64_decode_bytes(encoded: &str) -> Result<Vec<u8>, DecodeError> {
 /// If the given string isn't valid URL-safe base64, a [`DecodeError`] is
 /// returned
 pub fn b64_decode_string(encoded: &str) -> Result<String, DecodeError> {
-    base64::decode_config(encoded, URL_SAFE).map(|bytes| String::from_utf8_lossy(&bytes[..]).to_string())
+    b64_decode_bytes(encoded).map(|bytes| String::from_utf8_lossy(&bytes[..]).to_string())
 }
 
 /// Performs robtop's XOR en-/decryption routine on `encrypted` using `key`
@@ -113,28 +110,15 @@ pub fn xor_decrypt(encrypted: &str, key: &str) -> String {
 
 pub fn parse<'a, T>(idx: &'a str, value: &'a str) -> Result<Option<T>, ValueError<'a>>
 where
-    T: RobtopFrom<T, &'a str>,
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
 {
     if value == "" {
         return Ok(None)
     }
 
-    T::robtop_from(value)
+    value
+        .parse()
         .map(Some)
-        .map_err(|error| ValueError::Parse(idx, value, error))
-}
-
-// FIXME: this is just fucking horrible
-pub(crate) fn unparse<T>(value: T) -> String
-where
-    T: RobtopInto<T, String>,
-{
-    value.robtop_into()
-}
-
-pub(crate) fn can_omit<T>(value: &T) -> bool
-where
-    T: RobtopInto<T, String>,
-{
-    value.can_omit()
+        .map_err(|error: T::Err| ValueError::Parse(idx, value, error.to_string()))
 }

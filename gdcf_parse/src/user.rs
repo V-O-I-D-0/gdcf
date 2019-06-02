@@ -1,6 +1,6 @@
 use crate::{
-    convert::{TwitchConverter, TwitterConverter, YoutubeConverter},
     error::ValueError,
+    util::{default_to_none, int_to_bool},
     Parse,
 };
 use gdcf_model::user::{Creator, User};
@@ -43,20 +43,20 @@ parser! {
         user_coins(index = 17),
         index_18(index = 18),
         index_19(index = 19),
-        youtube_url(index = 20, parse_infallible = YoutubeConverter, default),
+        youtube_url(index = 20, parse_infallible = youtube, default),
         cube_index(index = 21),
         ship_index(index = 22),
         ball_index(index = 23),
         ufo_index(index = 24),
         wave_index(index = 25),
         robot_index(index = 26),
-        has_glow(index = 28),
+        has_glow(index = 28, with = int_to_bool),
         index_29(index = 29),
-        global_rank(index = 30),
+        global_rank(index = 30, with = default_to_none),
         index_31(index = 31),
         spider_index(index = 43),
-        twitter_url(index = 44, parse_infallible = TwitterConverter, default),
-        twitch_url(index = 45, parse_infallible = TwitchConverter, default),
+        twitter_url(index = 44, parse_infallible = twitter, default),
+        twitch_url(index = 45, parse_infallible = twitch, default),
         diamonds(index = 46),
         death_effect_index(index = 48),
         index_49(index = 49),
@@ -68,6 +68,6 @@ parser! {
     Creator => {
         user_id(index = 1),
         name(index = 2),
-        account_id(index = 3),
+        account_id(index = 3, with = default_to_none),
     }
 }
