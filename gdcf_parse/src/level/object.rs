@@ -1,11 +1,12 @@
-use crate::{error::ValueError, util::int_to_bool, Parse};
+use crate::{error::ValueError, Parse};
 use gdcf_model::level::data::{
     ids,
     portal::{PortalData, PortalType},
-    trigger::ColorTriggerData,
     text::TextData,
+    trigger::ColorTriggerData,
     ObjectData,
 };
+use std::collections::HashMap;
 
 impl Parse for ObjectData {
     fn parse<'a, I, F>(iter: I, mut f: F) -> Result<Self, ValueError<'a>>
@@ -33,12 +34,21 @@ impl Parse for ObjectData {
             },
         }
     }
+
+    fn unparse(self) -> HashMap<&'static str, String> {
+        match self {
+            ObjectData::None => HashMap::default(),
+            ObjectData::Portal(portal_data) => portal_data.unparse(),
+            ObjectData::Text(text_data) => text_data.unparse(),
+            ObjectData::ColorTrigger(color_trigger_data) => color_trigger_data.unparse(),
+        }
+    }
 }
 
 parser! {
     PortalData => {
-        checked(index = 13, with = int_to_bool),
-        portal_type(custom = PortalType::from_id_str, depends_on = [id]),
+        checked(index = 13),
+        portal_type(custom = PortalType::from_id_str[id]),
     },
     id(^index = 1, noparse),
 }
@@ -48,7 +58,7 @@ parser! {
         r(index = 7),
         g(index = 8),
         b(index = 9),
-        blending_enabled(index = 17, with = int_to_bool),
+        blending_enabled(index = 17),
     }
 }
 

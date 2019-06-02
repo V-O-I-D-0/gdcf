@@ -1,150 +1,177 @@
 macro_rules! __match_arm_expr {
     // Custom parser function
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, parse = $func: path) => {{
-        $field_name = match $func($value) {
-            Err(err) => return Err(ValueError::Parse(stringify!($idx), $value, err.to_string())),
+    (! $field_name: ident, $value: expr, index = $idx: expr, parse = $external: ident) => {{
+        $field_name = match $external::robtop_from($value) {
+            Err(err) => return Err(ValueError::Parse(stringify!($idx), $value, err)),
             Ok(v) => Some(v),
         }
-    }};
-
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, parse = $func: path, $($__:tt)*) => {{
-        $field_name = match $func($value) {
-            Err(err) => return Err(ValueError::Parse(stringify!($idx), $value, err.to_string())),
-            Ok(v) => Some(v),
-        }
-    }};
-
-    // Built-in parser, but map the value afterward
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, with = $func: path) => {{
-        $field_name = parse(stringify!($idx), $value)?.map($func)
-    }};
-
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, with = $func: path, $($__:tt)*) => {{
-        $field_name = parse(stringify!($idx), $value)?.map($func)
     }};
 
     // Custom parser that cannot fail
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, parse_infallible = $func: path) => {{
-        $field_name = Some($func($value))
-    }};
-
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, parse_infallible = $func: path, $($__:tt)*) => {{
-        $field_name = Some($func($value))
-    }};
-
-    // no parsing at all
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, noparse) => {{
-        $field_name = Some($value)
-    }};
-
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, noparse, $($__:tt)*) => {{
-        $field_name = Some($value)
+    (! $field_name: ident, $value: expr, index = $idx: expr, parse_infallible = $external: ident) => {{
+        $field_name = Some($external::robtop_from_infallible($value))
     }};
 
     // Built-in parsing
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr, $($__:tt)*) => {{
+    (! $field_name: ident, $value: expr, index = $idx: expr) => {{
         $field_name = parse(stringify!($idx), $value)?
     }};
 
-    (@ $_: expr, $field_name: ident, $value: expr, index = $idx: expr) => {{
-        $field_name = parse(stringify!($idx), $value)?
-    }};
+    (@  $_: expr, // Closure to propagate upward values to, irrelevant here
+        $field_name: ident, // Name of the field we're currently processing
+        $value: expr,       // The value to be parsed
+        index = $idx: expr, // The index at which we find this data in the response
 
-    // Custom parser function, but delegate original value upward
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, parse = $func: path) => {{
-        $f($idx, $value)?;
-        $field_name = match $func($value) {
-            Err(err) => return Err(ValueError::Parse(stringify!($idx), $value, err.to_string())),
-            Ok(v) => Some(v),
+        noparse  // No parsing should happen
+
+        // Things for ignore for this macro
+        $(, extract = $___: path[$($____:tt)*])? // 'extract' only matters during unparse generation
+        $(, default)?  // 'default' only matters when __unwrap!
+        $(, default_with = $__ :path)? // 'default_with' only matters when __unwrap!
+        $(, optional)?  // 'optional' only matters for __unwrap!
+    ) => {
+        $field_name = Some($value)
+    };
+
+    (@  $_: expr, // Closure to propagate upward values to, irrelevant here
+        $field_name: ident, // Name of the field we're currently processing
+        $value: expr,       // The value to be parsed
+        index = $idx: expr, // The index at which we find this data in the response
+
+        ignore // The value should be ignored during parsing
+
+        // Things for ignore for this macro
+        $(, extract = $___: path[$($____:tt)*])? // 'extract' only matters during unparse generation
+        $(, default)?  // 'default' only matters when __unwrap!
+        $(, default_with = $__ :path)? // 'default_with' only matters when __unwrap!
+        $(, optional)?  // 'optional' only matters for __unwrap!
+    ) => {{}};
+
+    (@  $_: expr, // Closure to propagate upward values to, irrelevant here
+        $field_name: ident, // Name of the field we're currently processing
+        $value: expr,       // The value to be parsed
+        index = $idx: expr // The index at which we find this data in the response
+
+        $(, parse_infallible = $p: ident)?  // External, infallible parser
+        $(, parse = $p2: ident)?  // External parser
+
+        // Things for ignore for this macro
+        $(, extract = $___: path[$($____:tt)*])? // 'extract' only matters during unparse generation
+        $(, default)?  // 'default' only matters when __unwrap!
+        $(, default_with = $__ :path)? // 'default_with' only matters when __unwrap!
+        $(, optional)?  // 'optional' only matters for __unwrap!
+    ) => {
+        __match_arm_expr!(! $field_name, $value, index = $idx $(, parse_infallible = $p)? $(, parse = $p2)?)
+    };
+
+    // The same as above, but it was indicated that the value should be propagated upward
+    (@  $f: expr,
+        $field_name: ident, // Name of the field we're currently processing
+        $value: expr,
+        ^index = $idx: expr // The index at which we find this data in the response
+        $(, $($rest:tt)*)?  // We'll deal with the rest above
+    ) => {{
+        $f(stringify!($idx), $value)?;
+        __match_arm_expr!(@ $f, $field_name, $value, index = $idx $(, $($rest)*)?)
+    }}
+}
+
+macro_rules! __into_expr {
+    // Custom parser function
+    (@ $map: expr, $value: expr, index = $idx: expr, parse = $external: ident, optional $(, $($__:tt)*)?) => {{
+        let value = RobtopInto::<$external, _>::robtop_into($value);
+        if RobtopInto::<$external, _>::can_omit(&value) {
+            $map.insert(stringify!($idx), value);
         }
     }};
 
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, parse = $func: path, $($__:tt)*) => {{
-        $f($idx, $value)?;
-        $field_name = match $func($value) {
-            Err(err) => return Err(ValueError::Parse(stringify!($idx), $value, err.to_string())),
-            Ok(v) => Some(v),
+    (@ $map: expr, $value: expr, index = $idx: expr, parse = $external: ident $(, $($__:tt)*)?) => {{
+        $map.insert(stringify!($idx), RobtopInto::<$external, _>::robtop_into($value))
+    }};
+
+    // Custom parser that cannot fail
+    (@ $map: expr, $value: expr, index = $idx: expr, parse_infallible = $external: ident $(, $($__:tt)*)?) => {{
+        __into_expr!(@ $map, $value, index = $idx, parse = $external)
+    }};
+
+    // Built-in parsing
+    (@ $map: expr, $value: expr, index = $idx: expr $(, $($__:tt)*)?) => {{
+        let value = crate::util::unparse($value);
+        if !crate::util::can_omit(&value) {
+            $map.insert(stringify!($idx), value);
         }
     }};
 
-    // Built-in parser, but map the value afterward AND delegate value upward
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, with = $func: path) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = parse(stringify!($idx), $value)?.map($func)
+    (@ $map: expr, $value: expr, index = $idx: expr $(, $($__:tt)*)?) => {{
+        $map.insert(stringify!($idx), crate::util::unparse($value))
     }};
 
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, with = $func: path, $($also_tokens:tt)*) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = parse(stringify!($idx), $value)?.map($func)
+    // Unparsing of helper variables
+    (! $map: expr, index = $idx: expr $(, parse = $_: ident)? $(, ignore)? $(, noparse)? $(, parse_infallible = $t: ident)?, extract = $extractor: path[$($arg: expr),*] $(, $($__:tt)*)?) => {{
+        $map.insert(stringify!($idx), $extractor($($arg,)*))
     }};
 
-    // Custom parser that cannot fail, but delegate the value upward
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, parse_infallible = $func: path) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = Some($func($value))
+    (! $map: expr, ^index = $idx: expr $(, $($__:tt)*)?) => {{
+        /* we're ignoring a value because it gets propagated upward: */
     }};
 
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, parse_infallible = $func: path, $($also_tokens:tt)*) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = Some($func($value))
+    (! $($t:tt)*) => {{
+        compile_error!("Please specific an extractor via `extract = <...>` for help variables")
     }};
 
-    // No parsing, but delegate the value upward
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, noparse) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = Some($value)
-    }};
-
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, noparse, $($also_tokens:tt)*) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = Some($value)
-    }};
-
-    // Build-in parsing, but delegate the value upward
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr, $($also_tokens:tt)*) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = parse(stringify!($idx), $value)?
-    }};
-
-    (@ $f: expr, $field_name: ident, $value: expr, ^index = $idx: expr) => {{
-        $f(stringify!($idx), $value)?;
-        $field_name = parse(stringify!($idx), $value)?
-    }};
+    (@ $($t:tt)*) => {
+        /* we're ignoring a value because it gets propagated upward: */
+    }
 }
 
 macro_rules! __index {
-    ($(^)?index = $idx: expr) => {
-        stringify!($idx)
-    };
-
-    ($(^)?index = $idx: expr, $($also_tokens:tt)*) => {
+    ($(^)?index = $idx: expr $(, $($__:tt)*)?) => {
         stringify!($idx)
     };
 }
 
 macro_rules! __unwrap {
-    ($field_name: ident($(^)?index = $idx: expr $(,noparse)?)) => {
+    ($field_name: ident($(^)?index = $idx: expr)) => {
         $field_name.ok_or(ValueError::NoValue(stringify!($idx)))?
+    };
+
+    ($field_name: ident($(^)?index = $idx: expr, optional)) => {
+        $field_name.unwrap_or_default()
     };
 
     ($field_name: ident($(^)?index = $idx: expr, default)) => {
         $field_name.unwrap_or_default()
     };
 
-    ($field_name: ident($(^)?index = $idx: expr $(,noparse)?, default = $default_func: path)) => {
+    ($field_name: ident($(^)?index = $idx: expr, ignore $(, $($t:tt)*)?)) => {{
+        // do nothing on parse
+    }};
+
+    ($field_name: ident($(^)?index = $idx: expr, default = $default_func: path)) => {
         $field_name.unwrap_or_self($default_func)
     };
 
-    ($field_name: ident($(^)?index = $idx: expr $(,noparse)?, with = $p: path $(, $($crap:tt)*)?)) => {
+    ($field_name: ident($(^)?index = $idx: expr, parse_infallible = $_: ty $(, $($crap:tt)*)?)) => {
         __unwrap!($field_name(index = $idx $(, $($crap)*)?))
     };
 
-    ($field_name: ident($(^)?index = $idx: expr $(,noparse)?, parse_infallible = $p: path $(, $($crap:tt)*)?)) => {
+    ($field_name: ident($(^)?index = $idx: expr, parse = $_: ty $(, $($crap:tt)*)?)) => {
         __unwrap!($field_name(index = $idx $(, $($crap)*)?))
     };
 
-    ($field_name: ident($(^)?index = $idx: expr $(,noparse)?, parse = $p: path $(, $($crap:tt)*)?)) => {
+    ($field_name: ident($(^)?index = $idx: expr, noparse $(, $($crap:tt)*)?)) => {
         __unwrap!($field_name(index = $idx $(, $($crap)*)?))
+    };
+
+    ($field_name: ident($(^)?index = $idx: expr, extract = $_: path[$($field: expr),*] $(, $($crap:tt)*)?)) => {
+        __unwrap!($field_name(index = $idx $(, $($crap)*)?))
+    };
+}
+
+macro_rules! __declare {
+    ($field_name: ident, index = $idx: expr, ignore $(, $($t:tt)*)?) => {{}};
+    ($field_name: ident, $($t:tt)*) => {
+        let mut $field_name = None;
     };
 }
 
@@ -172,7 +199,7 @@ macro_rules! parser {
     (@ $struct_name: ty
         [$(, $field_name: ident($($tokens:tt)*))*]
         [$(, $helper_field: ident($($tokens2:tt)*))*]
-        [$(, $custom_field: ident(custom = $func: path, depends_on = [$($field: expr),*]))*]
+        [$(, $custom_field: ident(custom = $func: path[$($field: expr),*]))*]
         [] []
     ) => {
         impl Parse for $struct_name {
@@ -183,28 +210,26 @@ macro_rules! parser {
                 F: FnMut(&'a str, &'a str) -> Result<(), ValueError<'a>>
             {
                 use $crate::util::parse;
+                use $crate::convert::RobtopFromInfallible;
+                use $crate::convert::RobtopFrom;
 
                 trace!("Parsing {}", stringify!($struct_name));
 
                 $(
-                    let mut $field_name = None;
+                    __declare!($field_name, $($tokens)*);
                 )*
 
                 $(
-                    let mut $helper_field = None;
+                    __declare!($helper_field, $($tokens2)*);
                 )*
 
                 for (idx, value) in iter.into_iter() {
                     match idx {
                         $(
-                            __index!($($tokens)*) => __match_arm_expr!(@ f, $field_name, value, $($tokens)*),//$field_name = __parsing!(@ value, $($tokens)*),
+                            __index!($($tokens)*) => __match_arm_expr!(@ f, $field_name, value, $($tokens)*),
                         )*
                         $(
-                            __index!($($tokens2)*) => __match_arm_expr!(@ f, $helper_field, value, $($tokens2)*),/*{
-                                $helper_field = __parsing!(@ value, $($tokens2)*);
-
-                                f(idx, value)?
-                            },*/
+                            __index!($($tokens2)*) => __match_arm_expr!(@ f, $helper_field, value, $($tokens2)*),
                         )*
                         _ => f(idx, value)?
                     }
@@ -226,6 +251,31 @@ macro_rules! parser {
                         $custom_field: $func($($field,)*),
                     )*
                 })
+            }
+
+            fn unparse(self) -> std::collections::HashMap<&'static str, String> {
+                use crate::convert::RobtopInto;
+
+                let Self {
+                    $(
+                        $field_name,
+                    )*
+                    $(
+                        $custom_field,
+                    )*
+                } = self;
+
+                let mut map = std::collections::HashMap::new();
+
+                $(
+                    __into_expr!(! map, $($tokens2)*);
+                )*
+
+                $(
+                    __into_expr!(@ map, $field_name, $($tokens)*);
+                )*
+
+                map
             }
         }
     };
@@ -256,28 +306,26 @@ macro_rules! parser {
                 F: FnMut(&'a str, &'a str) -> Result<(), ValueError<'a>>
             {
                 use $crate::util::parse;
+                use $crate::convert::RobtopFromInfallible;
+                use $crate::convert::RobtopFrom;
 
                 trace!("Parsing {}", stringify!($struct_name));
 
                 $(
-                    let mut $field_name = None;
+                    __declare!($field_name, $($tokens)*);
                 )*
 
                 $(
-                    let mut $helper_field = None;
+                    __declare!($helper_field, $($tokens2)*);
                 )*
 
                 let closure = |idx: &'a str, value: &'a str| -> Result<(), ValueError<'a>> {
                     match idx {
                         $(
-                            __index!($($tokens)*) => __match_arm_expr!(@ f, $field_name, value, $($tokens)*),//$field_name = __parsing!(@ value, $($tokens)*),
+                            __index!($($tokens)*) => __match_arm_expr!(@ f, $field_name, value, $($tokens)*),
                         )*
                         $(
-                            __index!($($tokens2)*) => __match_arm_expr!(@ f, $helper_field, value, $($tokens2)*),/*{
-                                $helper_field = __parsing!(@ value, $($tokens2)*);
-
-                                f(idx, value)?
-                            },*/
+                            __index!($($tokens2)*) => __match_arm_expr!(@ f, $helper_field, value, $($tokens2)*),
                         )*
                         _ => f(idx, value)?
                     }
@@ -304,6 +352,32 @@ macro_rules! parser {
                         $custom_field: $func($($field,)*),
                     )*
                 })
+            }
+
+            fn unparse(self) -> std::collections::HashMap<&'static str, String> {
+                use crate::convert::RobtopInto;
+
+                let Self {
+                    $(
+                        $field_name,
+                    )*
+                    $(
+                        $custom_field,
+                    )*
+                    $delegated
+                } = self;
+
+                let mut map = $delegated.unparse();//std::collections::HashMap::new();
+
+                $(
+                    __into_expr!(! map, $($tokens2)*);
+                )*
+
+                $(
+                    __into_expr!(@ map, $field_name, $($tokens)*);
+                )*
+
+                map
             }
         }
     };
