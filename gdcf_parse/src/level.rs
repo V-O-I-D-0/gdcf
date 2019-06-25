@@ -1,9 +1,11 @@
 use crate::{
+    convert::{Base64BytesConverter, Base64Converter, RobtopInto},
     error::ValueError,
     Parse,
 };
+use base64::{DecodeError, URL_SAFE};
 use gdcf_model::{
-    level::{DemonRating, Level, LevelRating, PartialLevel},
+    level::{DemonRating, Featured, Level, LevelLength, LevelRating, PartialLevel, Password},
     song::{MainSong, MAIN_SONGS, UNKNOWN},
 };
 
@@ -84,39 +86,82 @@ parser! {
     PartialLevel<u64, u64> => {
         level_id(index = 1),
         name(index = 2),
-        description(index = 3, parse_infallible = parse_description, default),
+        description(index = 3, parse_infallible = Base64Converter, default),
         version(index = 5),
         creator(index = 6),
-        difficulty(custom = process_difficulty, depends_on = [rating, is_auto, is_demon]),
+        difficulty(custom = process_difficulty[rating, is_auto, is_demon]),
         downloads(index = 10),
-        main_song(custom = process_song, depends_on = [main_song_id, &custom_song]),
+        main_song(custom = process_song[main_song_id, &custom_song]),
         gd_version(index = 13),
         likes(index = 14),
-        length(index = 15, parse_infallible = parse_level_length),
+        length(index = 15),
         stars(index = 18),
-        featured(index = 19, parse = parse_featured),
-        copy_of(index = 30, with = default_to_none),
-        custom_song(index = 35, with = default_to_none),
+        featured(index = 19),
+        copy_of(index = 30),
+        custom_song(index = 35),
         coin_amount(index = 37),
-        coins_verified(index = 38, with = int_to_bool),
-        stars_requested(index = 39, with = default_to_none),
-        is_epic(index = 42, with = int_to_bool),
+        coins_verified(index = 38),
+        stars_requested(index = 39),
+        is_epic(index = 42),
         index_43(index = 43),
         object_amount(index = 45),
-        index_46(index = 46),
-        index_47(index = 47),
+        index_46(index = 46, default),
+        index_47(index = 47, default),
     },
-    main_song_id(index = 12, default),
-    rating(index = 9),
-    is_demon(index = 17, with = int_to_bool, default),
-    is_auto(index = 25, with = int_to_bool, default),
+    main_song_id(index = 12, extract = extract_main_song_id[main_song], default),
+    rating(index = 9, extract = extract_rating[difficulty]),
+    is_demon(index = 17, extract = extract_is_demon[difficulty], default),
+    is_auto(index = 25, extract = extract_is_auto[difficulty], default),
+    is_na(index = 8, ignore, extract = extract_is_na[difficulty]),
+}
+
+fn extract_main_song_id(main_song: Option<&'static MainSong>) -> String {
+    main_song.map(|s| s.main_song_id).unwrap_or_default().robtop_into()
+}
+
+fn extract_rating(rating: LevelRating) -> String {
+    match rating {
+        LevelRating::NotAvailable => 0,
+        LevelRating::Easy => 10,
+        LevelRating::Normal => 20,
+        LevelRating::Hard => 30,
+        LevelRating::Harder => 40,
+        LevelRating::Insane => 50,
+        LevelRating::Demon(demon) =>
+            match demon {
+                DemonRating::Easy => 10,
+                DemonRating::Medium => 20,
+                DemonRating::Hard => 30,
+                DemonRating::Insane => 40,
+                DemonRating::Extreme => 50,
+                _ => 1971, // doesnt matter
+            },
+        _ => 1971, // doesnt matter
+    }
+    .robtop_into()
+}
+
+fn extract_is_demon(rating: LevelRating) -> String {
+    match rating {
+        LevelRating::Demon(_) => true,
+        _ => false,
+    }
+    .robtop_into()
+}
+
+fn extract_is_auto(rating: LevelRating) -> String {
+    (rating == LevelRating::Auto).robtop_into()
+}
+
+fn extract_is_na(rating: LevelRating) -> String {
+    (rating == LevelRating::NotAvailable).robtop_into()
 }
 
 parser! {
     Level<u64, u64> => {
         base(delegate),
-        level_data(index = 4, parse = b64_decode_bytes),
-        password(index = 27, parse = level_password),
+        level_data(index = 4, parse = Base64BytesConverter),
+        password(index = 27),
         time_since_upload(index = 28),
         time_since_update(index = 29),
         index_36(index = 36, default),
