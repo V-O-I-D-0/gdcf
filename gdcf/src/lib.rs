@@ -105,29 +105,25 @@
 //! tokio::run(future);
 //! ```
 
-// TODO: it would be nice to be able to differentiate between cache-miss because the data doesn't
-// exist and cache-miss because the data simply wasn't requested yet
-
 use crate::{
     api::{
         client::{MakeRequest, Response},
         request::{LevelRequest, LevelsRequest, PaginatableRequest, Request, UserRequest},
         ApiClient,
     },
-    cache::{Cache, CachedObject, CanCache},
-    error::GdcfError,
+    cache::{Cache, CacheEntry, CanCache, Lookup, Store},
+    error::{ApiError, GdcfError},
+    future::GdcfStream,
 };
-use futures::{
-    future::{err, ok, Either},
-    task, Async, Future, Stream,
-};
+use futures::{future::ok, Future, Stream};
 use gdcf_model::{
     level::{Level, PartialLevel},
     song::{NewgroundsSong, SERVER_SIDED_DATA_INCONSISTENCY_ERROR},
     user::{Creator, User, DELETED},
 };
-use log::{info, warn};
-use std::mem;
+use log::info;
+
+pub use crate::future::GdcfFuture;
 
 #[macro_use]
 mod macros;
@@ -137,13 +133,15 @@ pub mod cache;
 //pub mod convert;
 pub mod error;
 mod exchange;
-//pub mod model;
+mod future;
 
 // FIXME: move this somewhere more fitting
 #[derive(Debug, Clone, PartialEq)]
 pub enum Secondary {
     NewgroundsSong(NewgroundsSong),
     Creator(Creator),
+    MissingCreator(u64),
+    MissingNewgroundsSong(u64),
 }
 
 impl From<NewgroundsSong> for Secondary {
@@ -163,46 +161,149 @@ impl std::fmt::Display for Secondary {
         match self {
             Secondary::NewgroundsSong(inner) => inner.fmt(f),
             Secondary::Creator(inner) => inner.fmt(f),
+            Secondary::MissingCreator(cid) => write!(f, "Creator object missing server-sided: {}", cid),
+            Secondary::MissingNewgroundsSong(nid) => write!(f, "Newgrounds song object missing server-sided: {}", nid),
         }
     }
 }
 
-// TODO: for levels, get their creator via the getGJProfile endpoint, then we can give PartialLevel
-// a User
-
-use crate::error::{ApiError, CacheError};
-
 pub trait ProcessRequest<A: ApiClient, C: Cache, R: Request, T> {
-    fn process_request(&self, request: R) -> GdcfFuture<T, A::Err, C::Err>;
+    fn process_request(&self, request: R) -> Result<GdcfFuture<T, A::Err, C>, C::Err>;
 
-    fn paginate(&self, request: R) -> GdcfStream<A, C, R, T, Self>
+    fn paginate(&self, request: R) -> Result<GdcfStream<A, C, R, T, Self>, C::Err>
     where
         R: PaginatableRequest,
         Self: Sized + Clone,
     {
         let next = request.next();
-        let current = self.process_request(request);
+        let current = self.process_request(request)?;
 
-        GdcfStream {
+        Ok(GdcfStream {
             next_request: next,
             current_request: current,
             source: self.clone(),
-        }
+        })
     }
 }
 
-impl<A, R, C> ProcessRequest<A, C, R, R::Result> for Gdcf<A, C>
+#[derive(Debug, Clone)]
+pub struct Gdcf<A, C>
+where
+    A: ApiClient,
+    C: Cache,
+{
+    client: A,
+    cache: C,
+}
+
+impl<A, C> Gdcf<A, C>
+where
+    A: ApiClient,
+    C: Cache,
+{
+    pub fn new(client: A, cache: C) -> Gdcf<A, C> {
+        Gdcf { client, cache }
+    }
+
+    pub fn cache(&self) -> C {
+        self.cache.clone()
+    }
+
+    pub fn client(&self) -> A {
+        self.client.clone()
+    }
+}
+
+enum EitherOrBoth<A, B> {
+    A(A),
+    B(B),
+    Both(A, B),
+}
+
+impl<A, C> Gdcf<A, C>
 where
     R: Request + Send + Sync + 'static,
     A: ApiClient + MakeRequest<R>,
     C: Cache + CanCache<R>,
 {
-    fn process_request(&self, request: R) -> GdcfFuture<R::Result, A::Err, C::Err> {
+    fn refresh<R>(&self, request: R) -> impl Future<Item = CacheEntry<R::Result, C::CacheEntryMeta>, Error = GdcfError<A::Err, C::Err>>
+    where
+        R: Request,
+        A: MakeRequest<R>,
+        C: CanCache<R>,
+    {
+        info!("Performing refresh on request {}", request);
+
+        let mut cache = self.cache();
+        let mut cache2 = self.cache();
+        let key = request.key();
+
+        self.client()
+            .make(request)
+            .map_err(GdcfError::Api)
+            .and_then(move |response| {
+                match response {
+                    Response::Exact(what_we_want) =>
+                        cache
+                            .store(&what_we_want, key)
+                            .map(move |entry_info| CacheEntry::Cached(what_we_want, entry_info))
+                            .map_err(GdcfError::Cache),
+                    Response::More(what_we_want, excess) => {
+                        for object in &excess {
+                            match object {
+                                Secondary::NewgroundsSong(song) => cache.store(song, song.song_id),
+                                Secondary::Creator(creator) => cache.store(creator, creator.user_id),
+                                Secondary::MissingCreator(cid) => Store::<Creator>::mark_absent(&mut cache, *cid),
+                                Secondary::MissingNewgroundsSong(nid) => Store::<NewgroundsSong>::mark_absent(&mut cache, *nid),
+                            }
+                            .map_err(GdcfError::Cache)?;
+                        }
+
+                        cache
+                            .store(&what_we_want, key)
+                            .map(move |entry_info| CacheEntry::Cached(what_we_want, entry_info))
+                            .map_err(GdcfError::Cache)
+                    },
+                }
+            })
+            .or_else(move |error| {
+                // TODO: maybe mark malformed data as absent as well
+                if let GdcfError::Api(ref err) = error {
+                    if err.is_no_result() {
+                        return Store::<R::Result>::mark_absent(&mut cache2, key)
+                            .map(|entry_info| CacheEntry::MarkedAbsent(entry_info))
+                            .map_err(GdcfError::Cache)
+                    }
+                }
+
+                Err(error)
+            })
+    }
+
+    fn process<R>(
+        &self, request: R,
+    ) -> Result<
+        EitherOrBoth<
+            CacheEntry<R::Result, C::CacheEntryMeta>,
+            impl Future<Item = CacheEntry<R::Result, C::CacheEntryMeta>, Error = GdcfError<A::Err, C::Err>>,
+        >,
+        C::Err,
+    >
+    where
+        R: Request,
+        A: MakeRequest<R>,
+        C: CanCache<R>,
+    {
         info!("Processing request {}", request);
 
-        let cached = match self.cache.lookup(&request) {
-            Ok(cached) =>
-                if self.cache.is_expired(&cached) {
+        let cached = match self.cache.lookup_request(&request)? {
+            CacheEntry::Missing => {
+                info!("No cache entry for request {}", request);
+
+                None
+            },
+            entry =>
+                if entry.is_expired() {
                     info!("Cache entry for request {} is expired!", request);
 
                     Some(cached)
@@ -211,14 +312,6 @@ where
 
                     return GdcfFuture::up_to_date(cached)
                 },
-
-            Err(ref error) if error.is_cache_miss() => {
-                info!("No cache entry for request {}", request);
-
-                None
-            },
-
-            Err(error) => return GdcfFuture::cache_error(error),
         };
 
         let request_hash = self.cache.hash(&request);
@@ -258,19 +351,11 @@ where
     A: ApiClient,
     C: Cache,
 {
-    client: A,
-    cache: C,
-}
-
-impl<A, C> Clone for Gdcf<A, C>
-where
-    A: ApiClient,
-    C: Cache,
-{
-    fn clone(&self) -> Self {
-        Gdcf {
-            client: self.client.clone(),
-            cache: self.cache.clone(),
+    fn process_request(&self, request: R) -> Result<GdcfFuture<R::Result, A::Err, C>, C::Err> {
+        match self.process(request)? {
+            EitherOrBoth::A(entry) => Ok(GdcfFuture::UpToDate(entry)),
+            EitherOrBoth::B(future) => Ok(GdcfFuture::Uncached(Box::new(future))),
+            EitherOrBoth::Both(entry, future) => Ok(GdcfFuture::Outdated(entry, Box::new(future))),
         }
     }
 }
@@ -282,55 +367,16 @@ where
     C: Cache + CanCache<LevelRequest> + CanCache<LevelsRequest>,
     User: PartialEq + Send + 'static,
 {
-    fn process_request(&self, request: LevelRequest) -> GdcfFuture<Level<NewgroundsSong, User>, A::Err, C::Err> {
-        info!(
-            "Processing request {} with 'NewgroundsSong' as Song type for arbitrary User type",
-            request
-        );
-
-        // When simply downloading a level, we do not get its song, only the song ID. The song itself is
-        // only provided for a LevelsRequest
-
-        let raw = self.level::<u64, User>(request);
+    fn process_request(&self, request: LevelRequest) -> Result<GdcfFuture<Level<NewgroundsSong, u64>, <A as ApiClient>::Err, C>, C::Err> {
+        let (cache1, cache2) = (self.cache(), self.cache());
         let gdcf = self.clone();
 
-        // TODO: reintroduce debugging statements
-
-        match raw {
-            GdcfFuture {
-                cached: Some(cached),
-                inner: None,
-            } =>
-            // In this case, we have the level cached and up-to-date
-                match cached.inner().base.custom_song {
-                    // Level uses a main song, we dont need to do anything apart from changing the generic type
-                    None => GdcfFuture::up_to_date(cached.map(|inner| exchange::level_song(inner, None))),
-
-                    // Level uses a custom song.
-                    Some(custom_song_id) => {
-                        // We cannot do the lookup in the match because then the cache would be locked for the entire match
-                        // block which would deadlock because of the `process_request` call in it.
-                        let lookup = self.cache().lookup_song(custom_song_id);
-
-                        match lookup {
-                            // The custom song is cached, replace the ID with actual song object and change generic type
-                            Ok(song) => GdcfFuture::up_to_date(cached.map(|inner| exchange::level_song(inner, Some(song.extract())))),
-
-                            // The custom song isn't cached, make a request that's sure to put it into the cache, then perform the exchange
-                            Err(ref err) if err.is_cache_miss() => {
-                                let cached = cached.extract();
-
-                                warn!("The level requested was cached, but not its song, performing a request to retrieve it!");
-
-                                GdcfFuture::absent(
-                                    self.levels::<u64, u64>(LevelsRequest::default().with_id(cached.base.level_id))
-                                        .and_then(move |_| {
-                                            let song = gdcf.cache().lookup_song(custom_song_id).map_err(GdcfError::Cache)?;
-
-                                            Ok(exchange::level_song(cached, Some(song.extract())))
-                                        }),
-                                )
-                            },
+        let lookup = move |level: &Level<u64, u64>| {
+            match level.base.custom_song {
+                Some(song_id) => cache1.lookup(song_id),
+                None => Ok(CacheEntry::DeducedAbsent),
+            }
+        };
 
                             // Cache lookup failed, create future that resolves to error instantly
                             Err(err) => GdcfFuture::cache_error(err),
@@ -338,67 +384,17 @@ where
                     },
                 },
 
-            GdcfFuture { cached, inner: Some(f) } => {
-                // In this case we have it cached, but not up to date, or not cached at all
-                let cached = match cached {
-                    Some(cached) =>
-                    // If we have it cached, we need to update the cached value either with its custom song from the cache, if that exists.
-                    // If it doesn't, we will end up creating a future that does not contain any cached object.
-                        match cached.inner().base.custom_song {
-                            None => Some(cached.map(|inner| exchange::level_song(inner, None))),
-                            Some(custom_song_id) =>
-                                match self.cache().lookup_song(custom_song_id) {
-                                    Ok(song) => Some(cached.map(|inner| exchange::level_song(inner, Some(song.extract())))),
+            gdcf.refresh(LevelsRequest::default().with_id(level.base.level_id))
+                .and_then(move |_| {
+                    match cache2.lookup(song_id) {
+                        Ok(CacheEntry::Missing) => Ok(CacheEntry::DeducedAbsent),
+                        Ok(obj) => Ok(obj),
+                        Err(err) => Err(GdcfError::Cache(err)),
+                    }
+                })
+        };
 
-                                    Err(ref err) if err.is_cache_miss() => None,
-
-                                    Err(err) => return GdcfFuture::cache_error(err),
-                                },
-                        },
-                    None => None, // Level itself wasn't cached already
-                };
-
-                GdcfFuture::new(
-                    cached,
-                    Some(f.and_then(move |level| {
-                        if let Some(song_id) = level.base.custom_song {
-                            // We cannot do the lookup in the match because then the cache would be locked for the entire match
-                            // block which would deadlock because of the `process_request` call in it.
-                            let lookup = gdcf.cache().lookup_song(song_id);
-
-                            match lookup {
-                                // Here we must have this logic inside of the future. If we were to lookup the song_id we got from the
-                                // (potentially) cached object, it might be outdated, leaving us with an up-to-date level object that
-                                // contains a NewgroundsSong object, which does not represent the song the level uses (because the song was
-                                // changed between now and the last time the level was cached)
-                                Err(ref err) if err.is_cache_miss() => {
-                                    warn!(
-                                        "The level the song for the requested level was not cached, performing a request to retrieve it!"
-                                    );
-
-                                    Either::A(
-                                        gdcf.levels::<u64, u64>(LevelsRequest::default().with_id(level.base.level_id))
-                                            .and_then(move |_| {
-                                                let song = gdcf.cache().lookup_song(song_id).map_err(GdcfError::Cache)?;
-
-                                                Ok(exchange::level_song(level, Some(song.extract())))
-                                            }),
-                                    )
-                                },
-
-                                Err(error) => Either::B(err(GdcfError::Cache(error))),
-
-                                Ok(song) => Either::B(ok(exchange::level_song(level, Some(song.extract())))),
-                            }
-                        } else {
-                            Either::B(ok(exchange::level_song(level, None)))
-                        }
-                    })),
-                )
-            },
-
-            _ => unreachable!(),
-        }
+        self.level(request)?.extend(lookup, refresh, exchange::level_song)
     }
 }
 
@@ -409,48 +405,26 @@ where
     C: Cache + CanCache<LevelsRequest>,
     User: PartialEq + Send + 'static,
 {
-    fn process_request(&self, request: LevelsRequest) -> GdcfFuture<Vec<PartialLevel<NewgroundsSong, User>>, A::Err, C::Err> {
-        info!("Processing request {} with 'NewgroundsSong' as Song type", request);
+    fn process_request(&self, request: LevelRequest) -> Result<GdcfFuture<Level<Song, Option<Creator>>, <A as ApiClient>::Err, C>, C::Err> {
+        let cache = self.cache();
+        let cache2 = self.cache();
+        let gdcf = self.clone();
 
-        let GdcfFuture { cached, inner } = self.process_request(request);
-        let cache = self.cache.clone();
+        let lookup = move |level: &Level<Song, u64>| cache.lookup(level.base.creator);
+        let refresh = move |level: &Level<Song, u64>| {
+            let user_id = level.base.creator;
 
-        let processor = move |levels: Vec<PartialLevel<u64, User>>| {
-            let mut vec = Vec::new();
-
-            for partial_level in levels {
-                let built = match partial_level.custom_song {
-                    Some(custom_song_id) =>
-                        match cache.lookup_song(custom_song_id) {
-                            Ok(song) => exchange::partial_level_song(partial_level, Some(song.extract())),
-
-                            Err(err) =>
-                                if err.is_cache_miss() {
-                                    exchange::partial_level_song(partial_level, Some(SERVER_SIDED_DATA_INCONSISTENCY_ERROR()))
-                                } else {
-                                    return Err(GdcfError::Cache(err))
-                                },
-                        },
-
-                    None => exchange::partial_level_song(partial_level, None),
-                };
-
-                vec.push(built);
-            }
-
-            Ok(vec)
+            gdcf.refresh(LevelsRequest::default().with_id(level.base.level_id))
+                .and_then(move |_| {
+                    match cache2.lookup(user_id) {
+                        Ok(CacheEntry::Missing) => Ok(CacheEntry::DeducedAbsent),
+                        Ok(obj) => Ok(obj),
+                        Err(err) => Err(GdcfError::Cache(err)),
+                    }
+                })
         };
 
-        let cached = match cached {
-            Some(cached) =>
-                match cached.try_map(processor.clone()) {
-                    Ok(cached) => Some(cached),
-                    Err(err) => return GdcfFuture::error(err),
-                },
-            None => None,
-        };
-
-        GdcfFuture::new(cached, inner.map(|fut| fut.and_then(processor)))
+        self.level(request)?.extend(lookup, refresh, exchange::level_user)
     }
 }
 
@@ -459,48 +433,32 @@ where
     A: ApiClient + MakeRequest<LevelsRequest>,
     C: Cache + CanCache<LevelsRequest>,
 {
-    fn process_request(&self, request: LevelsRequest) -> GdcfFuture<Vec<PartialLevel<u64, Creator>>, A::Err, C::Err> {
-        info!("Processing request {} with 'Creator' as User type", request);
+    fn process_request(&self, request: LevelRequest) -> Result<GdcfFuture<Level<Song, Option<User>>, <A as ApiClient>::Err, C>, C::Err> {
+        let cache = self.cache();
+        let gdcf = self.clone();
 
-        let GdcfFuture { cached, inner } = self.process_request(request);
-        let cache = self.cache.clone();
+        let lookup = move |level: &Level<Song, Option<Creator>>| {
+            level
+                .base
+                .creator
+                .as_ref()
+                .and_then(|creator| creator.account_id)
+                .map(|account_id| cache.lookup(account_id))
+                .unwrap_or(Ok(CacheEntry::DeducedAbsent))
+        };
 
-        let processor = move |levels: Vec<PartialLevel<u64, u64>>| {
-            let mut vec = Vec::new();
-
-            for partial_level in levels {
-                // Note that we do not need to check if the cache value is out-of-date here, because we only
-                // request creators that we put into the cache by the very request whose result we're processing
-                // here. I THINK it's impossible to have an outdated creator while not having the level request
-                // outdated we well.
-                vec.push(match cache.lookup_creator(partial_level.creator) {
-                    Ok(creator) => exchange::partial_level_user(partial_level, creator.extract()),
-
-                    // For very old levels where the players never registered, the accounts got lost somehow. LevelsRequest containing such
-                    // levels don't contain any creator info about those levels. This again implies that the cache miss, which should be
-                    // impossible, is such a case.
-                    Err(err) =>
-                        if err.is_cache_miss() {
-                            exchange::partial_level_user(partial_level, DELETED())
-                        } else {
-                            return Err(GdcfError::Cache(err))
-                        },
+        let refresh = move |level: &Level<Song, Option<Creator>>| {
+            gdcf.refresh(UserRequest::new(level.base.creator.as_ref().unwrap().account_id.unwrap()))
+                .then(|result| {
+                    match result {
+                        Err(GdcfError::Api(ref err)) if err.is_no_result() => Ok(CacheEntry::DeducedAbsent),
+                        Err(err) => Err(err),
+                        Ok(thing) => Ok(thing),
+                    }
                 })
-            }
-
-            Ok(vec)
         };
 
-        let cached = match cached {
-            Some(cached) =>
-                match cached.try_map(processor.clone()) {
-                    Ok(cached) => Some(cached),
-                    Err(err) => return GdcfFuture::error(err),
-                },
-            None => None,
-        };
-
-        GdcfFuture::new(cached, inner.map(|fut| fut.and_then(processor)))
+        self.level(request)?.extend(lookup, refresh, exchange::level_user)
     }
 }
 
@@ -509,155 +467,86 @@ where
     A: ApiClient + MakeRequest<LevelRequest> + MakeRequest<LevelsRequest>,
     C: Cache + CanCache<LevelRequest> + CanCache<LevelsRequest>,
 {
-    fn process_request(&self, request: LevelRequest) -> GdcfFuture<Level<u64, Creator>, A::Err, C::Err> {
-        info!("Processing request {} with 'Creator' as User type", request);
+    fn process_request(
+        &self, request: LevelsRequest,
+    ) -> Result<GdcfFuture<Vec<PartialLevel<Song, Option<Creator>>>, <A as ApiClient>::Err, C>, C::Err> {
+        let cache = self.cache();
 
-        // Note that the creator of a level cannot change. We can always use the user ID cached with the
-        // level (if existing).
-        //let raw: GdcfFuture<Level<u64, u64>, _, _> = self.process_request(request);
-        let raw = self.level::<u64, u64>(request);
-        let gdcf = self.clone();
+        let lookup = move |level: &PartialLevel<Song, u64>| cache.lookup(level.creator);
 
-        match raw {
-            GdcfFuture {
-                cached: Some(cached),
-                inner: None,
-            } => {
-                let lookup = self.cache().lookup_creator(cached.inner().base.creator);
+        // All creators are provided along with the `LevelsRequest` response. A cache miss above means that
+        // the GD servers failed to provide the creator - there's nothing we can do about it, so we just
+        // return a future that resolves to `None` here (making a LevelsRequest would obviously lead to an
+        // infinite loop of sorts)
+        let refresh = move |_: &PartialLevel<Song, u64>| ok(CacheEntry::DeducedAbsent);
 
-                match lookup {
-                    Ok(creator) => {
-                        info!("Level {} up-to-date, returning cached version!", cached.inner());
-
-                        GdcfFuture::up_to_date(cached.map(|inner| exchange::level_user(inner, creator.extract())))
-                    },
-
-                    Err(ref err) if err.is_cache_miss() => {
-                        warn!(
-                            "Level {} was up-to-date, but creator is missing from cache. Constructing LevelsRequest to retrieve creator",
-                            cached.inner()
-                        );
-
-                        let cached = cached.extract();
-
-                        GdcfFuture::absent(
-                            self.levels::<u64, u64>(LevelsRequest::default().with_id(cached.base.level_id))
-                                .and_then(move |_| {
-                                    let lookup = gdcf.cache().lookup_creator(cached.base.creator);
-
-                                    match lookup {
-                                        Ok(creator) => Ok(exchange::level_user(cached, creator.extract())),
-
-                                        Err(ref err) if err.is_cache_miss() => {
-                                            let creator = Creator::deleted(cached.base.creator);
-
-                                            gdcf.cache().store_secondary(&creator.clone().into()).map_err(GdcfError::Cache)?;
-
-                                            Ok(exchange::level_user(cached, creator))
-                                        },
-
-                                        Err(err) => Err(GdcfError::Cache(err)),
-                                    }
-                                }),
-                        )
-                    },
-
-                    Err(err) => GdcfFuture::cache_error(err),
-                }
-            },
-
-            GdcfFuture { cached, inner: Some(f) } => {
-                let cached = match cached {
-                    Some(cached) =>
-                        match self.cache().lookup_creator(cached.inner().base.creator) {
-                            Ok(creator) => Some(cached.map(|inner| exchange::level_user(inner, creator.extract()))),
-
-                            Err(ref err) if err.is_cache_miss() => None, /* NOTE: here we cannot decide whether the creator isn't
-                                                                           * cached, or */
-                            // whether his GD account was deleted. We go with the conversative
-                            // option and assume it wasn't cached.
-                            Err(err) => return GdcfFuture::cache_error(err),
-                        },
-
-                    None => None,
-                };
-
-                if let Some(ref level) = cached {
-                    info!("Cache entry is {}", level.inner());
-                } else {
-                    warn!("Cache entry for request missing");
-                }
-
-                GdcfFuture::new(
-                    cached,
-                    Some(f.and_then(move |level| {
-                        let lookup = gdcf.cache().lookup_creator(level.base.creator);
-
-                        match lookup {
-                            Ok(creator) => Either::B(ok(exchange::level_user(level, creator.extract()))),
-
-                            Err(ref err) if err.is_cache_miss() =>
-                                Either::A(
-                                    gdcf.levels::<u64, u64>(LevelsRequest::default().with_id(level.base.level_id))
-                                        .and_then(move |_| {
-                                            let lookup = gdcf.cache().lookup_creator(level.base.creator);
-
-                                            match lookup {
-                                                Ok(creator) => Ok(exchange::level_user(level, creator.extract())),
-
-                                                Err(ref err) if err.is_cache_miss() => {
-                                                    let creator = Creator::deleted(level.base.creator);
-
-                                                    gdcf.cache().store_secondary(&creator.clone().into()).map_err(GdcfError::Cache)?;
-
-                                                    Ok(exchange::level_user(level, creator))
-                                                },
-
-                                                Err(err) => Err(GdcfError::Cache(err)),
-                                            }
-                                        }),
-                                ),
-
-                            Err(error) => Either::B(err(GdcfError::Cache(error))),
-                        }
-                    })),
-                )
-            },
-
-            _ => unreachable!(),
-        }
+        self.levels(request)?
+            .extend_all(lookup, refresh, |p, q| Some(exchange::partial_level_user(p, q)))
     }
 }
 
-// TODO: impl ProcessRequest<LevelsRequest, Vec<PartialLevel<u64, User>>> for Gdcf
-
-// TODO: impl ProcessRequest<LevelRequest, Level<u64, User>> for Gdcf
-
-/*impl<A, C> ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<u64, User>>> for Gdcf<A, C>
+impl<A, C> ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<NewgroundsSong, u64>>> for Gdcf<A, C>
 where
-    A: ApiClient,
-    C: Cache,
+    A: ApiClient + MakeRequest<LevelsRequest>,
+    C: Cache + Store<Creator> + Store<NewgroundsSong> + CanCache<LevelsRequest> + Lookup<NewgroundsSong>,
+    Gdcf<A, C>: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<u64, u64>>>,
 {
-    fn process_request(&self, request: LevelsRequest) -> GdcfFuture<Vec<PartialLevel<u64, User>>, A::Err, C::Err> {
-        let raw: GdcfFuture<Vec<PartialLevel<u64, u64>>, _, _> = self.process_request(request);
-        let cache = self.cache.clone();
+    fn process_request(
+        &self, request: LevelsRequest,
+    ) -> Result<GdcfFuture<Vec<PartialLevel<NewgroundsSong, u64>>, <A as ApiClient>::Err, C>, C::Err> {
+        let cache = self.cache();
 
-        match raw {
-            GdcfFuture {cached: Some(cached), inner: None} => {
-                match self.cache().lookup_user(&cached.creator.into()) {
-                    Ok(user) => GdcfFuture::up_to_date(build::partial_level_user(user)),
+        let lookup = move |level: &PartialLevel<u64, u64>| {
+            match level.custom_song {
+                Some(song_id) => cache.lookup(song_id),
+                None => Ok(CacheEntry::DeducedAbsent),
+            }
+        };
 
-                    Err(CacheError::CacheMiss) => {
-                        //GdcfFuture::absent(self.user)
-                        unimplemented!()
+        // All songs are provided along with the `LevelsRequest` response. A cache miss above means that
+        // the GD servers failed to provide the song - there's nothing we can do about it, so we just
+        // return a future that resolves to `None` here (making a LevelsRequest would obviously lead to an
+        // infinite loop of sorts)
+        let refresh = move |_: &PartialLevel<u64, u64>| ok(CacheEntry::DeducedAbsent);
+
+        self.levels(request)?
+            .extend_all(lookup, refresh, |p, q| Some(exchange::partial_level_song(p, q)))
+    }
+}
+
+impl<A, C, Song> ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, Option<User>>>> for Gdcf<A, C>
+where
+    A: ApiClient + MakeRequest<LevelsRequest> + MakeRequest<UserRequest>,
+    C: Cache + Store<Creator> + Store<NewgroundsSong> + CanCache<LevelsRequest> + CanCache<UserRequest> + Lookup<Creator>,
+    Song: PartialEq + Send + Clone + 'static,
+    Gdcf<A, C>: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, Option<Creator>>>>,
+{
+    fn process_request(
+        &self, request: LevelsRequest,
+    ) -> Result<GdcfFuture<Vec<PartialLevel<Song, Option<User>>>, <A as ApiClient>::Err, C>, C::Err> {
+        let cache = self.cache();
+        let gdcf = self.clone();
+
+        let lookup = move |level: &PartialLevel<Song, Option<Creator>>| {
+            level
+                .creator
+                .as_ref()
+                .and_then(|creator| creator.account_id)
+                .map(|account_id| cache.lookup(account_id))
+                .unwrap_or(Ok(CacheEntry::DeducedAbsent))
+        };
+
+        let refresh = move |level: &PartialLevel<Song, Option<Creator>>| {
+            gdcf.refresh(UserRequest::new(level.creator.as_ref().unwrap().account_id.unwrap()))
+                .then(|result| {
+                    match result {
+                        Err(GdcfError::Api(ref err)) if err.is_no_result() => Ok(CacheEntry::DeducedAbsent),
+                        Err(err) => Err(err),
+                        Ok(thing) => Ok(thing),
                     }
 
-                    Err(err) => GdcfFuture::error(err.into())
-                }
-            }
-
-            _ => unreachable!()
-        }
+        self.levels(request)?
+            .extend_all(lookup, refresh, |p, q| Some(exchange::partial_level_user(p, q)))
     }
 }*/
 
@@ -666,18 +555,6 @@ where
     A: ApiClient,
     C: Cache,
 {
-    pub fn new(client: A, cache: C) -> Gdcf<A, C> {
-        Gdcf { client, cache }
-    }
-
-    pub fn cache(&self) -> C {
-        self.cache.clone()
-    }
-
-    pub fn client(&self) -> A {
-        self.client.clone()
-    }
-
     /// Processes the given [`LevelRequest`]
     ///
     /// The `User` and `Song` type parameters determine, which sequence of requests should be made
@@ -701,7 +578,7 @@ where
     /// second one and uses the cached value (or at least it will if you set cache-expiry to
     /// anything larger than 0 seconds - but then again why would you use GDCF if you don't use the
     /// cache)
-    pub fn level<Song, User>(&self, request: LevelRequest) -> GdcfFuture<Level<Song, User>, A::Err, C::Err>
+    pub fn level<Song, User>(&self, request: LevelRequest) -> Result<GdcfFuture<Level<Song, User>, A::Err, C>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelRequest, Level<Song, User>>,
         A: MakeRequest<LevelRequest>,
@@ -721,13 +598,13 @@ where
     /// + [`u64`] - The creator are only provided as their user IDs. Causes no additional requests
     /// + [`Creator`] - Causes no additional requests
     /// + [`User`] - Causes up to 10 additional [`UserRequest`]s to retrieve every creator's
-    /// profile (Not Yet Implemented)
+    /// profile
     ///
     /// `Song` can currently be one of the following:
     /// + [`u64`] - The custom song is provided only as its newgrounds ID. Causes no additional
     /// requests
     /// + [`NewgroundsSong`] - Causes no additional requests.
-    pub fn levels<Song, User>(&self, request: LevelsRequest) -> GdcfFuture<Vec<PartialLevel<Song, User>>, A::Err, C::Err>
+    pub fn levels<Song, User>(&self, request: LevelsRequest) -> Result<GdcfFuture<Vec<PartialLevel<Song, User>>, A::Err, C>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>>,
         A: MakeRequest<LevelsRequest>,
@@ -742,7 +619,7 @@ where
     /// parameter until it hits the first empty page.
     pub fn paginate_levels<Song, User>(
         &self, request: LevelsRequest,
-    ) -> impl Stream<Item = Vec<PartialLevel<Song, User>>, Error = GdcfError<A::Err, C::Err>>
+    ) -> Result<impl Stream<Item = CacheEntry<Vec<PartialLevel<Song, User>>, C::CacheEntryMeta>, Error = GdcfError<A::Err, C::Err>>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>>,
         Song: PartialEq,
@@ -752,133 +629,11 @@ where
     }
 
     /// Processes the given [`UserRequest`]
-    pub fn user(&self, request: UserRequest) -> GdcfFuture<User, A::Err, C::Err>
+    pub fn user(&self, request: UserRequest) -> Result<GdcfFuture<User, A::Err, C>, C::Err>
     where
         A: MakeRequest<UserRequest>,
         C: CanCache<UserRequest>,
     {
         self.process_request(request)
-    }
-}
-
-#[allow(missing_debug_implementations)]
-pub struct GdcfFuture<T, A: ApiError, C: CacheError> {
-    // invariant: at least one of the fields is not `None`
-    pub cached: Option<CachedObject<T>>,
-    pub inner: Option<Box<dyn Future<Item = T, Error = GdcfError<A, C>> + Send + 'static>>,
-}
-
-impl<T, A: ApiError, C: CacheError> GdcfFuture<T, A, C> {
-    fn new<F>(cached: Option<CachedObject<T>>, f: Option<F>) -> Self
-    where
-        F: Future<Item = T, Error = GdcfError<A, C>> + Send + 'static,
-    {
-        GdcfFuture {
-            cached,
-            inner: match f {
-                None => None,
-                Some(f) => Some(Box::new(f)),
-            },
-        }
-    }
-
-    fn up_to_date(object: CachedObject<T>) -> Self {
-        GdcfFuture {
-            cached: Some(object),
-            inner: None,
-        }
-    }
-
-    fn outdated<F>(object: CachedObject<T>, f: F) -> Self
-    where
-        F: Future<Item = T, Error = GdcfError<A, C>> + Send + 'static,
-    {
-        GdcfFuture::new(Some(object), Some(f))
-    }
-
-    fn absent<F>(f: F) -> Self
-    where
-        F: Future<Item = T, Error = GdcfError<A, C>> + Send + 'static,
-    {
-        GdcfFuture::new(None, Some(f))
-    }
-
-    fn cache_error(error: C) -> Self
-    where
-        T: Send + 'static,
-    {
-        GdcfFuture::new(None, Some(err(GdcfError::Cache(error))))
-    }
-
-    fn error(error: GdcfError<A, C>) -> Self
-    where
-        T: Send + 'static,
-    {
-        GdcfFuture::new(None, Some(err(error)))
-    }
-
-    pub fn cached(&self) -> &Option<CachedObject<T>> {
-        &self.cached
-    }
-}
-
-impl<T, A: ApiError, C: CacheError> Future for GdcfFuture<T, A, C> {
-    type Error = GdcfError<A, C>;
-    type Item = T;
-
-    fn poll(&mut self) -> Result<Async<T>, GdcfError<A, C>> {
-        match self.inner {
-            Some(ref mut fut) => fut.poll(),
-            None => Ok(Async::Ready(self.cached.take().unwrap().extract())),
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-pub struct GdcfStream<A, C, R, T, M>
-where
-    R: PaginatableRequest,
-    M: ProcessRequest<A, C, R, T>,
-    A: ApiClient,
-    C: Cache,
-{
-    next_request: R,
-    current_request: GdcfFuture<T, A::Err, C::Err>,
-    source: M,
-}
-
-impl<A, C, R, T, M> Stream for GdcfStream<A, C, R, T, M>
-where
-    R: PaginatableRequest,
-    M: ProcessRequest<A, C, R, T>,
-    A: ApiClient,
-    C: Cache,
-{
-    type Error = GdcfError<A::Err, C::Err>;
-    type Item = T;
-
-    fn poll(&mut self) -> Result<Async<Option<T>>, Self::Error> {
-        match self.current_request.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-
-            Ok(Async::Ready(result)) => {
-                task::current().notify();
-
-                let next = self.next_request.next();
-                let cur = mem::replace(&mut self.next_request, next);
-
-                self.current_request = self.source.process_request(cur);
-
-                Ok(Async::Ready(Some(result)))
-            },
-
-            Err(GdcfError::Api(ref err)) if err.is_no_result() => {
-                info!("Stream over request {} terminating due to exhaustion!", self.next_request);
-
-                Ok(Async::Ready(None))
-            },
-
-            Err(err) => Err(err),
-        }
     }
 }

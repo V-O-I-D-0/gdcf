@@ -1,14 +1,11 @@
 use crate::{
     error::ValueError,
-    util::{b64_decode_bytes, b64_decode_string, default_to_none, int_to_bool, xor_decrypt, encode_url},
     Parse,
 };
-use base64::DecodeError;
 use gdcf_model::{
-    level::{Featured, Level, LevelLength, LevelRating, PartialLevel, Password},
+    level::{DemonRating, Level, LevelRating, PartialLevel},
     song::{MainSong, MAIN_SONGS, UNKNOWN},
 };
-use std::num::ParseIntError;
 
 pub mod data;
 pub mod object;
