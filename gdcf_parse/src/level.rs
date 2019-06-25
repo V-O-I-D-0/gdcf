@@ -1,6 +1,7 @@
 use crate::{
     convert::{Base64BytesConverter, Base64Converter, RobtopInto},
     error::ValueError,
+    util::{encode_url, b64_decode_string},
     Parse,
 };
 use base64::{DecodeError, URL_SAFE};
@@ -8,6 +9,7 @@ use gdcf_model::{
     level::{DemonRating, Featured, Level, LevelLength, LevelRating, PartialLevel, Password},
     song::{MainSong, MAIN_SONGS, UNKNOWN},
 };
+use std::num::ParseIntError;
 
 pub mod data;
 pub mod object;

@@ -86,29 +86,47 @@ meta_table!(level_meta, level_id);
 lookup_simply!(SemiLevel, level, level_meta, level_id);
 
 impl Lookup<Level<u64, u64>> for Cache {
-    fn lookup(&self, key: u64) -> Result<CacheEntry<Level<u64, u64>, Self>, Self::Err> {
-        let CacheEntry { object: semi, metadata }: CacheEntry<SemiLevel, _> = self.lookup(key)?;
-        let partial = self.lookup(semi.level_id)?.into_inner();
+    fn lookup(&self, key: u64) -> Result<CacheEntry<Level<u64, u64>, Entry>, Self::Err> {
+        match self.lookup(key)? {
+            CacheEntry::Cached(semi_level, meta) => {
+                let semi_level: SemiLevel = semi_level;
 
-        Ok(CacheEntry {
-            object: Level {
-                base: partial,
-                level_data: semi.level_data,
-                password: semi.level_password,
-                time_since_upload: semi.time_since_upload,
-                time_since_update: semi.time_since_update,
-                index_36: semi.index_36,
+                match self.lookup(semi_level.level_id)? {
+                    CacheEntry::Cached(partial, _) =>
+                        Ok(CacheEntry::Cached(
+                            Level {
+                                base: partial,
+                                level_data: semi_level.level_data,
+                                password: semi_level.level_password,
+                                time_since_upload: semi_level.time_since_upload,
+                                time_since_update: semi_level.time_since_update,
+                                index_36: semi_level.index_36,
+                            },
+                            meta,
+                        )),
+                    CacheEntry::DeducedAbsent => Ok(CacheEntry::DeducedAbsent),
+                    CacheEntry::MarkedAbsent(meta) => Ok(CacheEntry::MarkedAbsent(meta)),
+                    CacheEntry::Missing => Ok(CacheEntry::Missing),
+                }
             },
-            metadata,
-        })
+            CacheEntry::DeducedAbsent => Ok(CacheEntry::DeducedAbsent),
+            CacheEntry::MarkedAbsent(meta) => Ok(CacheEntry::MarkedAbsent(meta)),
+            CacheEntry::Missing => Ok(CacheEntry::Missing),
+        }
     }
 }
 
 impl Store<Level<u64, u64>> for Cache {
+    fn mark_absent(&mut self, key: u64) -> Result<Entry, Self::Err> {
+        let entry = Entry::absent(key);
+        update_entry!(self, entry, level_meta::table, level_meta::level_id);
+        Ok(entry)
+    }
+
     fn store(&mut self, obj: &Level<u64, u64>, key: u64) -> Result<Self::CacheEntryMeta, Self::Err> {
         self.store(&obj.base, obj.base.level_id)?;
 
-        debug!("Storing {}", obj);
+        debug!("Storing {} under key {}", obj, key as i64);
 
         let entry = Entry::new(key);
 

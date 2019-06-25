@@ -228,11 +228,21 @@ macro_rules! store_simply {
             use crate::{meta::Entry, Cache};
             use diesel::RunQueryDsl;
             use gdcf::cache::Store;
-            use log::debug;
+            use log::{debug, warn};
 
             impl Store<$to_store_ty> for Cache {
+                fn mark_absent(&mut self, key: u64) -> Result<Entry, Self::Err> {
+                    warn!("Marking {} with key {} as absent!", stringify!($to_store_ty), key as i64);
+
+                    let entry = Entry::absent(key);
+
+                    update_entry!(&self, entry, $meta::table, $meta::$primary);
+
+                    Ok(entry)
+                }
+
                 fn store(&mut self, object: &$to_store_ty, key: u64) -> Result<Entry, Self::Err> {
-                    debug!("Storing {}", object);
+                    debug!("Storing {} under key {}", object, key as i64);
 
                     let entry = Entry::new(key);
 
@@ -249,20 +259,32 @@ macro_rules! store_simply {
 macro_rules! lookup_simply {
     ($to_lookup_ty: ty, $object_table: ident,  $meta_table: ident, $primary_column: ident) => {
         fn __impl_lookup() {
-            use crate::{wrap::Wrapped, Cache};
+            use crate::{wrap::Wrapped, Cache, Entry};
             use diesel::{QueryDsl, RunQueryDsl};
             use gdcf::cache::{CacheEntry, Lookup};
+            use log::{trace, debug};
 
             impl Lookup<$to_lookup_ty> for Cache {
-                fn lookup(&self, key: u64) -> Result<CacheEntry<$to_lookup_ty, Self>, Self::Err> {
+                fn lookup(&self, key: u64) -> Result<CacheEntry<$to_lookup_ty, Entry>, Self::Err> {
+                    trace!("Performing look up of {} with key {} in table {} (meta table {})", stringify!($to_lookup_ty), key as i64, stringify!($object_table), stringify!($meta_table));
+
                     let connection = self.pool.get()?;
-                    let entry = $meta_table::table
+                    let entry = handle_missing!($meta_table::table
                         .filter($meta_table::$primary_column.eq(key as i64))
-                        .get_result(&connection)?;
+                        .get_result(&connection));
                     let entry = self.entry(entry);
-                    let wrapped: Wrapped<$to_lookup_ty> = $object_table::table
+
+                    trace!("Successfully retrieved meta entry");
+
+                    if entry.absent {
+                        debug!("Object marked as absent!");
+
+                        return Ok(CacheEntry::MarkedAbsent(entry))
+                    }
+
+                    let wrapped: Wrapped<$to_lookup_ty> = handle_missing!($object_table::table
                         .filter($object_table::$primary_column.eq(key as i64))
-                        .get_result(&connection)?;
+                        .get_result(&connection));
 
                     Ok(CacheEntry::new(wrapped.0, entry))
                 }
@@ -306,11 +328,9 @@ macro_rules! diesel_stuff {
 
         /*
         Alright, so
-
         Wrapped( $rust_ty {
             ...
         })
-
         doesn't work because macro variables are weird like that, so we need this very noisy workaround
         */
         trait __ConstructExt {
@@ -357,6 +377,20 @@ macro_rules! diesel_stuff {
                     $column_name.eq(__for_values!(object.$field_name, $($rust_type)*))
                 ),*
             )
+        }
+    };
+}
+
+macro_rules! handle_missing {
+    ($database_call: expr) => {
+        match $database_call {
+            Err(diesel::result::Error::NotFound) => {
+                log::warn!("Cache miss!");
+
+                return Ok(CacheEntry::Missing)
+            },
+            Err(err) => return Err($crate::Error::Database(err)),
+            Ok(whatevs) => whatevs,
         }
     };
 }

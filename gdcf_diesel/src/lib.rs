@@ -20,10 +20,7 @@ extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
 
-use crate::{
-    meta::{DatabaseEntry, Entry},
-    wrap::Wrapped,
-};
+use crate::{meta::DatabaseEntry, wrap::Wrapped};
 use chrono::{DateTime, Duration, Utc};
 use diesel::{query_dsl::QueryDsl, r2d2::ConnectionManager, ExpressionMethods, RunQueryDsl};
 use failure::Fail;
@@ -33,6 +30,9 @@ use gdcf::{
 };
 use gdcf_model::level::PartialLevel;
 use r2d2::Pool;
+use log::{warn, debug};
+
+pub use crate::meta::Entry;
 
 // this means we cannot enable two features at once. Since diesel doesn't allow writing database
 // agnostic code, the alternative to this is wrapping everything in macros (like we used to do in
@@ -61,6 +61,7 @@ impl Cache {
             expired,
             key: db_entry.key as u64,
             cached_at: db_entry.cached_at,
+            absent: db_entry.absent,
         }
     }
 }
@@ -129,9 +130,6 @@ mod sqlite {
 
 #[derive(Debug, Fail)]
 pub enum Error {
-    #[fail(display = "Not in database :(")]
-    CacheMiss,
-
     #[fail(display = "Database error: {}", _0)]
     Database(#[cause] diesel::result::Error),
 
@@ -151,14 +149,7 @@ impl From<diesel::result::Error> for Error {
     }
 }
 
-impl CacheError for Error {
-    fn is_cache_miss(&self) -> bool {
-        match self {
-            Error::CacheMiss | Error::Database(diesel::result::Error::NotFound) => true,
-            _ => false,
-        }
-    }
-}
+impl CacheError for Error {}
 
 impl gdcf::cache::Cache for Cache {
     type CacheEntryMeta = Entry;
@@ -169,32 +160,52 @@ impl gdcf::cache::Cache for Cache {
 // one of them, so its fine
 
 impl Lookup<Vec<PartialLevel<u64, u64>>> for Cache {
-    fn lookup(&self, key: u64) -> Result<CacheEntry<Vec<PartialLevel<u64, u64>>, Self>, Self::Err> {
+    fn lookup(&self, key: u64) -> Result<CacheEntry<Vec<PartialLevel<u64, u64>>, Entry>, Self::Err> {
         use crate::partial_level::*;
         use diesel::JoinOnDsl;
 
         let connection = self.pool.get()?;
 
-        let entry: DatabaseEntry = level_list_meta::table
+        let entry = handle_missing!(level_list_meta::table
             .filter(level_list_meta::request_hash.eq(key as i64))
-            .get_result(&connection)?;
+            .get_result(&connection));
 
-        let levels = partial_level::table
+        let entry = self.entry(entry);
+
+        if entry.absent {
+            return Ok(CacheEntry::MarkedAbsent(entry))
+        }
+
+        let levels = handle_missing!(partial_level::table
             .inner_join(request_results::table.on(partial_level::level_id.eq(request_results::level_id)))
             .filter(request_results::request_hash.eq(key as i64))
             .select(partial_level::all_columns)
-            .load(&connection)?
-            .into_iter()
-            .map(|row: Wrapped<_>| row.0)
-            .collect();
+            .load(&connection))
+        .into_iter()
+        .map(|row: Wrapped<_>| row.0)
+        .collect();
 
-        Ok(CacheEntry::new(levels, self.entry(entry)))
+        Ok(CacheEntry::new(levels, entry))
     }
 }
 
 impl Store<Vec<PartialLevel<u64, u64>>> for Cache {
+    fn mark_absent(&mut self, key: u64) -> Result<Entry, Self::Err> {
+        use crate::partial_level::*;
+
+        warn!("Marking results of LevelsRequest with key {} as absent!", key);
+
+        let entry = Entry::absent(key);
+
+        update_entry!(self, entry, level_list_meta::table, level_list_meta::request_hash);
+
+        Ok(entry)
+    }
+
     fn store(&mut self, partial_levels: &Vec<PartialLevel<u64, u64>>, key: u64) -> Result<Self::CacheEntryMeta, Self::Err> {
         use crate::partial_level::*;
+
+        debug!("Storing result of LevelsRequest with key {}", key);
 
         let conn = self.pool.get()?;
 
