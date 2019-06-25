@@ -1,4 +1,4 @@
-CREATE TABLE newgrounds_song (
+CREATE TABLE IF NOT EXISTS newgrounds_song (
     song_id BIGINT PRIMARY KEY,
     song_name TEXT NOT NULL,
     index_3 INTEGER,
@@ -10,23 +10,23 @@ CREATE TABLE newgrounds_song (
     song_link TEXT
 );
 
-CREATE TABLE song_meta (
+CREATE TABLE IF NOT EXISTS song_meta (
     song_id BIGINT PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
 
-CREATE TABLE creator (
+CREATE TABLE IF NOT EXISTS creator (
     user_id BIGINT PRIMARY KEY,
     name TEXT NOT NULL,
     account_id BIGINT
 );
 
-CREATE TABLE creator_meta (
+CREATE TABLE IF NOT EXISTS creator_meta (
     user_id BIGINT PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
 
-CREATE TABLE partial_level (
+CREATE TABLE IF NOT EXISTS partial_level (
     level_id BIGINT PRIMARY KEY,
     level_name TEXT NOT NULL,
     description TEXT,
@@ -52,22 +52,22 @@ CREATE TABLE partial_level (
     index_47 TEXT
 );
 
-CREATE TABLE partial_level_meta (
+CREATE TABLE IF NOT EXISTS partial_level_meta (
     level_id BIGINT PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
 
-CREATE TABLE level_list_meta (
+CREATE TABLE IF NOT EXISTS level_list_meta (
     request_hash BIGINT PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
 
-CREATE TABLE request_results (
+CREATE TABLE IF NOT EXISTS request_results (
     level_id BIGINT NOT NULL,
     request_hash BIGINT NOT NULL
 );
 
-CREATE TABLE level (
+CREATE TABLE IF NOT EXISTS level (
     level_id BIGINT PRIMARY KEY REFERENCES partial_level (level_id),
     level_data BYTEA NOT NULL,
     level_password TEXT,
@@ -76,12 +76,12 @@ CREATE TABLE level (
     index_36 TEXT
 );
 
-CREATE TABLE level_meta (
+CREATE TABLE IF NOT EXISTS level_meta (
     level_id BIGINT PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
 
-CREATE TABLE profile (
+CREATE TABLE IF NOT EXISTS profile (
     username TEXT NOT NULL,
     user_id BIGINT PRIMARY KEY,
     stars INTEGER NOT NULL,
@@ -114,7 +114,7 @@ CREATE TABLE profile (
     index_50 TEXT
 );
 
-CREATE TABLE profile_meta (
+CREATE TABLE IF NOT EXISTS profile_meta (
     user_id INTEGER PRIMARY KEY,
     cached_at TIMESTAMP WITHOUT TIME ZONE
 );
