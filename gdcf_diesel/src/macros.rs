@@ -46,6 +46,8 @@ macro_rules! __diesel_type {
     (Featured) => {Int4};
     (GameVersion) => {Int2};
     (MainSong) => {Int2};
+    (ModLevel) => {Int2};
+    (Color) => {Int4};
 }
 
 macro_rules! __ref_if_not_copy {
@@ -70,6 +72,8 @@ macro_rules! __ref_if_not_copy {
     (Featured) => {i32};
     (GameVersion) => {i16};
     (MainSong) => {i16};
+    (ModLevel) => {i16};
+    (Color) => {i32};
 }
 
 macro_rules! __row_type {
@@ -93,6 +97,8 @@ macro_rules! __row_type {
     (Featured) => {i32};
     (GameVersion) => {i16};
     (MainSong) => {i16};
+    (ModLevel) => {i16};
+    (Color) => {i32};
 }
 
 macro_rules! __for_queryable {
@@ -136,6 +142,16 @@ macro_rules! __for_queryable {
     }};
     ($value: expr, GameVersion) => {{
         GameVersion::from($value as u8)
+    }};
+    ($value: expr, ModLevel) => {{
+        ModLevel::from($value as u8)
+    }};
+    ($value: expr, Color) => {{
+        if $value < 0 {
+            Color::Unknown(-$value as u8)
+        } else {
+            Color::Known($value as u8, ($value >> 8) as u8, ($value >> 16) as u8)
+        }
     }};
     ($value: expr, $($t:tt)*) => {
         $value
@@ -217,6 +233,16 @@ macro_rules! __for_values {
         let byte: u8 = $value.into();
         byte as i16
     }};
+    ($value: expr, ModLevel) => {{
+        let byte: u8 = $value.into();
+        byte as i16
+    }};
+    ($value: expr, Color) => {{
+        match $value {
+            Color::Unknown(idx) => -(idx as i32),
+            Color::Known(r, g, b) => r as i32 | (g as i32) << 8 | (b as i32) << 16,
+        }
+    }};
     ($value: expr, $($t:tt)*) => {
         &$value
     };
@@ -262,11 +288,17 @@ macro_rules! lookup_simply {
             use crate::{wrap::Wrapped, Cache, Entry};
             use diesel::{QueryDsl, RunQueryDsl};
             use gdcf::cache::{CacheEntry, Lookup};
-            use log::{trace, debug};
+            use log::{debug, trace};
 
             impl Lookup<$to_lookup_ty> for Cache {
                 fn lookup(&self, key: u64) -> Result<CacheEntry<$to_lookup_ty, Entry>, Self::Err> {
-                    trace!("Performing look up of {} with key {} in table {} (meta table {})", stringify!($to_lookup_ty), key as i64, stringify!($object_table), stringify!($meta_table));
+                    trace!(
+                        "Performing look up of {} with key {} in table {} (meta table {})",
+                        stringify!($to_lookup_ty),
+                        key as i64,
+                        stringify!($object_table),
+                        stringify!($meta_table)
+                    );
 
                     let connection = self.pool.get()?;
                     let entry = handle_missing!($meta_table::table

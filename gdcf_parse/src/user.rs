@@ -1,9 +1,9 @@
 use crate::{
-    convert::{TwitchConverter, TwitterConverter, YoutubeConverter},
+    convert::{TwitchConverter, TwitterConverter, TwoBool, YoutubeConverter},
     error::ValueError,
     Parse,
 };
-use gdcf_model::user::{Creator, User};
+use gdcf_model::user::{Creator, SearchedUser, User};
 
 pub fn youtube(value: &str) -> Option<String> {
     if value.is_empty() {
@@ -36,8 +36,8 @@ parser! {
         stars(index = 3),
         demons(index = 4),
         creator_points(index = 8),
-        index_10(index = 10),
-        index_11(index = 11),
+        primary_color(index = 10),
+        secondary_color(index = 11),
         secret_coins(index = 13),
         account_id(index = 16),
         user_coins(index = 17),
@@ -59,7 +59,7 @@ parser! {
         twitch_url(index = 45, parse_infallible = TwitchConverter, default),
         diamonds(index = 46),
         death_effect_index(index = 48),
-        index_49(index = 49),
+        mod_level(index = 49),
         index_50(index = 50),
     }
 }
@@ -69,5 +69,24 @@ parser! {
         user_id(index = 1),
         name(index = 2),
         account_id(index = 3),
+    }
+}
+
+parser! {
+    SearchedUser => {
+        name(index = 1),
+        user_id(index = 2),
+        stars(index = 3),
+        demons(index = 4),
+        index_6(index = 6, default),
+        creator_points(index = 8),
+        icon_index(index = 9),
+        primary_color(index = 10),
+        secondary_color(index = 11),
+        secret_coins(index = 13),
+        icon_type(index = 14),
+        has_glow(index = 15, parse = TwoBool),
+        account_id(index = 16),
+        user_coins(index = 17),
     }
 }

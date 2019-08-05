@@ -121,9 +121,11 @@ use gdcf_model::{
     song::NewgroundsSong,
     user::{Creator, User},
 };
-use log::info;
+use log::{error, info, warn};
 
 pub use crate::future::GdcfFuture;
+use crate::{api::request::user::UserSearchRequest, cache::CacheUserExt};
+use gdcf_model::user::SearchedUser;
 
 #[macro_use]
 mod macros;
@@ -268,6 +270,8 @@ where
                 // TODO: maybe mark malformed data as absent as well
                 if let GdcfError::Api(ref err) = error {
                     if err.is_no_result() {
+                        warn!("Request yielded no result, marking as absent");
+
                         return Store::<R::Result>::mark_absent(&mut cache2, key)
                             .map(|entry_info| CacheEntry::MarkedAbsent(entry_info))
                             .map_err(GdcfError::Cache)
@@ -279,7 +283,8 @@ where
     }
 
     fn process<R>(
-        &self, request: R,
+        &self,
+        request: R,
     ) -> Result<
         EitherOrBoth<
             CacheEntry<R::Result, C::CacheEntryMeta>,
@@ -443,7 +448,8 @@ where
     Gdcf<A, C>: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, u64>>>,
 {
     fn process_request(
-        &self, request: LevelsRequest,
+        &self,
+        request: LevelsRequest,
     ) -> Result<GdcfFuture<Vec<PartialLevel<Song, Option<Creator>>>, <A as ApiClient>::Err, C>, C::Err> {
         let cache = self.cache();
 
@@ -467,7 +473,8 @@ where
     Gdcf<A, C>: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<u64, u64>>>,
 {
     fn process_request(
-        &self, request: LevelsRequest,
+        &self,
+        request: LevelsRequest,
     ) -> Result<GdcfFuture<Vec<PartialLevel<NewgroundsSong, u64>>, <A as ApiClient>::Err, C>, C::Err> {
         let cache = self.cache();
 
@@ -497,7 +504,8 @@ where
     Gdcf<A, C>: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, Option<Creator>>>>,
 {
     fn process_request(
-        &self, request: LevelsRequest,
+        &self,
+        request: LevelsRequest,
     ) -> Result<GdcfFuture<Vec<PartialLevel<Song, Option<User>>>, <A as ApiClient>::Err, C>, C::Err> {
         let cache = self.cache();
         let gdcf = self.clone();
@@ -524,6 +532,33 @@ where
 
         self.levels(request)?
             .extend_all(lookup, refresh, |p, q| Some(exchange::partial_level_user(p, q)))
+    }
+}
+
+impl<A, C> ProcessRequest<A, C, UserSearchRequest, User> for Gdcf<A, C>
+where
+    A: ApiClient + MakeRequest<UserSearchRequest> + MakeRequest<UserRequest>,
+    C: Cache + CanCache<UserSearchRequest> + CanCache<UserRequest> + CacheUserExt + Store<NewgroundsSong> + Store<Creator>,
+    Self: ProcessRequest<A, C, UserRequest, User>,
+{
+    fn process_request(&self, request: UserSearchRequest) -> Result<GdcfFuture<User, <A as ApiClient>::Err, C>, <C as Cache>::Err> {
+        let cache = self.cache();
+        let clone = self.clone();
+
+        match cache.username_to_account_id(&request.search_string) {
+            Some(account_id) => self.user(account_id),
+            None => {
+                let lookup = move |searched_user: &SearchedUser| {
+                    error!("Username to account ID resolution failed although (Searched)User was cached. This is a bug in the cache implementation of `CacheUserExt`!");
+
+                    cache.lookup(searched_user.account_id)
+                };
+                let refresh = move |searched_user: &SearchedUser| clone.refresh(UserRequest::new(searched_user.account_id));
+                let combinator = |_, user| user;
+
+                self.search_user(request)?.extend(lookup, refresh, combinator)
+            },
+        }
     }
 }
 
@@ -555,13 +590,13 @@ where
     /// second one and uses the cached value (or at least it will if you set cache-expiry to
     /// anything larger than 0 seconds - but then again why would you use GDCF if you don't use the
     /// cache)
-    pub fn level<Song, User>(&self, request: LevelRequest) -> Result<GdcfFuture<Level<Song, User>, A::Err, C>, C::Err>
+    pub fn level<Song, User>(&self, request: impl Into<LevelRequest>) -> Result<GdcfFuture<Level<Song, User>, A::Err, C>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelRequest, Level<Song, User>>,
         Song: PartialEq,
         User: PartialEq,
     {
-        self.process_request(request)
+        self.process_request(request.into())
     }
 
     /// Processes the given [`LevelsRequest`]
@@ -579,33 +614,44 @@ where
     /// + [`u64`] - The custom song is provided only as its newgrounds ID. Causes no additional
     /// requests
     /// + [`NewgroundsSong`] - Causes no additional requests.
-    pub fn levels<Song, User>(&self, request: LevelsRequest) -> Result<GdcfFuture<Vec<PartialLevel<Song, User>>, A::Err, C>, C::Err>
+    pub fn levels<Song, User>(
+        &self,
+        request: impl Into<LevelsRequest>,
+    ) -> Result<GdcfFuture<Vec<PartialLevel<Song, User>>, A::Err, C>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>>,
         Song: PartialEq,
         User: PartialEq,
     {
-        self.process_request(request)
+        self.process_request(request.into())
     }
 
     /// Generates a stream of pages of levels by incrementing the [`LevelsRequest`]'s `page`
     /// parameter until it hits the first empty page.
     pub fn paginate_levels<Song, User>(
-        &self, request: LevelsRequest,
+        &self,
+        request: impl Into<LevelsRequest>,
     ) -> Result<impl Stream<Item = CacheEntry<Vec<PartialLevel<Song, User>>, C::CacheEntryMeta>, Error = GdcfError<A::Err, C::Err>>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>>,
         Song: PartialEq,
         User: PartialEq,
     {
-        self.paginate(request)
+        self.paginate(request.into())
     }
 
     /// Processes the given [`UserRequest`]
-    pub fn user(&self, request: UserRequest) -> Result<GdcfFuture<User, A::Err, C>, C::Err>
+    pub fn user(&self, request: impl Into<UserRequest>) -> Result<GdcfFuture<User, A::Err, C>, C::Err>
     where
         Self: ProcessRequest<A, C, UserRequest, User>,
     {
-        self.process_request(request)
+        self.process_request(request.into())
+    }
+
+    pub fn search_user<U>(&self, request: impl Into<UserSearchRequest>) -> Result<GdcfFuture<U, A::Err, C>, C::Err>
+    where
+        Self: ProcessRequest<A, C, UserSearchRequest, U>,
+    {
+        self.process_request(request.into())
     }
 }

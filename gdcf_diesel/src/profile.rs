@@ -6,7 +6,7 @@ use diesel::{
     sql_types::{Int8, Nullable, Text},
     ExpressionMethods, Queryable,
 };
-use gdcf_model::user::User;
+use gdcf_model::user::{Color, ModLevel, User};
 
 impl<'a> Identifiable for &'a Wrapped<User> {
     type Id = &'a u64;
@@ -23,8 +23,8 @@ diesel_stuff! {
         (stars, stars, u32),
         (demons, demons, u16),
         (creator_points, creator_points, u16),
-        (index_10, index_10, String),
-        (index_11, index_11, String),
+        (primary_color, primary_color, Color),
+        (secondary_color, secondary_color, Color),
         (secret_coins, secret_coins, u8),
         (account_id, account_id, u64),
         (user_coins, user_coins, u16),
@@ -46,7 +46,7 @@ diesel_stuff! {
         (twitch_url, twitch_url, Option<String>),
         (diamonds, diamonds, u16),
         (death_effect_index, death_effect_index, u8),
-        (index_49, index_49, String),
+        (mod_level, mod_level, ModLevel),
         (index_50, index_50, String)
     }
 }

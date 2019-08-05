@@ -26,6 +26,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+pub mod comment;
 pub mod level;
 pub mod user;
 
@@ -99,7 +100,7 @@ impl Default for BaseRequest {
 /// they're built upon. If new fields are added in later version of GDCF, they
 /// may only be hashed if they are explicitly set to a value, to ensure the
 /// above-mentioned compatibility
-pub trait Request: Display + Default + Hash + Clone + Send + Sync + 'static {
+pub trait Request: Display + Hash + Clone + Send + Sync + 'static {
     type Result: Send + Sync + 'static;
 
     fn key(&self) -> u64 {

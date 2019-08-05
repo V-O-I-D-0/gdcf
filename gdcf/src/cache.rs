@@ -83,7 +83,9 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
     }
 
     pub(crate) fn combine<AddOn, R>(
-        self, other: CacheEntry<AddOn, Meta>, combinator: impl Fn(T, Option<AddOn>) -> Option<R>,
+        self,
+        other: CacheEntry<AddOn, Meta>,
+        combinator: impl Fn(T, Option<AddOn>) -> Option<R>,
     ) -> CacheEntry<R, Meta> {
         match self {
             CacheEntry::Missing => CacheEntry::Missing,
@@ -108,7 +110,10 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
     }
 
     pub(crate) fn extend<A: ApiError, C: CacheError, AddOn, U, Look, Req, Comb, Fut>(
-        self, lookup: Look, request: Req, combinator: Comb,
+        self,
+        lookup: Look,
+        request: Req,
+        combinator: Comb,
     ) -> Result<
         (
             CacheEntry<U, Meta>,
@@ -150,7 +155,10 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
 // from it.
 impl<T, Meta: CacheEntryMeta> CacheEntry<Vec<T>, Meta> {
     pub(crate) fn extend_all<A: ApiError, C: CacheError, AddOn, U, Look, Req, Comb, Fut>(
-        self, lookup: Look, request: Req, combinator: Comb,
+        self,
+        lookup: Look,
+        request: Req,
+        combinator: Comb,
     ) -> Result<
         (
             CacheEntry<Vec<U>, Meta>,
@@ -217,4 +225,13 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<Vec<T>, Meta> {
 pub trait CacheEntryMeta: Copy + Send + Sync + 'static {
     fn is_expired(&self) -> bool;
     fn is_absent(&self) -> bool;
+}
+
+pub trait CacheUserExt {
+    /// Tries to somehow map the username to an account ID, using whatever data is available
+    ///
+    /// If the user associated with this name is found in either the [`SearchedUser`] or [`User`]
+    /// cache, this function must never, under any circumstances, return [`None`]. Doing so is
+    /// considered a bug which the library may or may not recover from.
+    fn username_to_account_id(&self, name: &str) -> Option<u64>;
 }

@@ -1,5 +1,5 @@
 use crate::{
-    convert::{Base64BytesConverter, Base64Converter, RobtopInto},
+    convert::{Base64BytesConverter, Base64Converter, RobtopFrom, RobtopInto},
     error::ValueError,
     util::{encode_url, b64_decode_string},
     Parse,
@@ -14,13 +14,14 @@ use std::num::ParseIntError;
 pub mod data;
 pub mod object;
 
-pub fn process_difficulty(rating: i32, is_auto: bool, is_demon: bool) -> LevelRating {
+pub fn process_difficulty(rating: &str, is_auto: bool, is_demon: bool) -> LevelRating {
     if is_demon {
-        LevelRating::Demon(rating.into())
+        LevelRating::Demon(DemonRating::robtop_from(rating).unwrap()) // FIXME: make custom
+                                                                      // functions return result
     } else if is_auto {
         LevelRating::Auto
     } else {
-        rating.into()
+        LevelRating::robtop_from(rating).unwrap()
     }
 }
 
@@ -100,10 +101,12 @@ parser! {
         stars(index = 18),
         featured(index = 19),
         copy_of(index = 30),
+        index_31(index = 31),
         custom_song(index = 35),
         coin_amount(index = 37),
         coins_verified(index = 38),
         stars_requested(index = 39),
+        index_40(index = 40),
         is_epic(index = 42),
         index_43(index = 43),
         object_amount(index = 45),
@@ -122,41 +125,22 @@ fn extract_main_song_id(main_song: Option<&'static MainSong>) -> String {
 }
 
 fn extract_rating(rating: LevelRating) -> String {
-    match rating {
-        LevelRating::NotAvailable => 0,
-        LevelRating::Easy => 10,
-        LevelRating::Normal => 20,
-        LevelRating::Hard => 30,
-        LevelRating::Harder => 40,
-        LevelRating::Insane => 50,
-        LevelRating::Demon(demon) =>
-            match demon {
-                DemonRating::Easy => 10,
-                DemonRating::Medium => 20,
-                DemonRating::Hard => 30,
-                DemonRating::Insane => 40,
-                DemonRating::Extreme => 50,
-                _ => 1971, // doesnt matter
-            },
-        _ => 1971, // doesnt matter
-    }
-    .robtop_into()
+    rating.robtop_into()
 }
 
 fn extract_is_demon(rating: LevelRating) -> String {
-    match rating {
+    RobtopInto::<bool, String>::robtop_into(match rating {
         LevelRating::Demon(_) => true,
         _ => false,
-    }
-    .robtop_into()
+    })
 }
 
 fn extract_is_auto(rating: LevelRating) -> String {
-    (rating == LevelRating::Auto).robtop_into()
+    RobtopInto::<bool, String>::robtop_into(rating == LevelRating::Auto)
 }
 
 fn extract_is_na(rating: LevelRating) -> String {
-    (rating == LevelRating::NotAvailable).robtop_into()
+    RobtopInto::<bool, String>::robtop_into(rating == LevelRating::NotAvailable)
 }
 
 parser! {

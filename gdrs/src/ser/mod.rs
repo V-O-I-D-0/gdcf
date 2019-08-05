@@ -1,13 +1,18 @@
 pub use self::request::{
+    comment::{LevelCommentsRequestRem, ProfileCommentsRequestRem},
     level::{LevelRequestRem, LevelsRequestRem},
-    user::UserRequestRem,
+    user::{UserRequestRem, UserSearchRequestRem},
     BaseRequestRem,
 };
-use gdcf::api::request::level::{CompletionFilter, LevelRequestType, SearchFilters, SongFilter};
+use gdcf::api::request::{
+    comment::SortMode,
+    level::{CompletionFilter, LevelRequestType, SearchFilters, SongFilter},
+};
 use gdcf_model::{
     level::{DemonRating, LevelLength, LevelRating},
     GameVersion,
 };
+use gdcf_parse::convert::RobtopInto;
 use joinery::Joinable;
 use serde::{ser::SerializeMap, Serializer};
 
@@ -15,11 +20,11 @@ mod request;
 
 /// Converts the given [`Vec`] of values convertible into signed integers
 /// into a robtop-approved string.
-pub fn vec<T: Into<i32> + Copy>(list: &[T]) -> String {
+pub fn vec<T: RobtopInto<T, String> + Copy>(list: &[T]) -> String {
     if list.is_empty() {
         String::from("-")
     } else {
-        list.iter().map(|v| T::into(*v)).join_with(",").to_string()
+        list.iter().map(|v| T::robtop_into_req(*v)).join_with(",").to_string()
     }
 }
 
@@ -42,7 +47,7 @@ pub(super) fn game_version<S>(version: &GameVersion, serializer: S) -> Result<S:
 where
     S: Serializer,
 {
-    serializer.collect_str(&version.to_string())
+    serializer.serialize_str(&version.robtop_into())
 }
 
 pub(super) fn bool_to_int<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
@@ -70,7 +75,7 @@ pub(super) fn demon_rating<S>(rating: &Option<DemonRating>, serialize: S) -> Res
 where
     S: Serializer,
 {
-    serialize.serialize_i32(rating.unwrap().into())
+    serialize.serialize_str(&rating.unwrap().robtop_into_req())
 }
 
 pub(super) fn req_type<S>(req_type: &LevelRequestType, serializer: S) -> Result<S::Ok, S::Error>
@@ -78,6 +83,16 @@ where
     S: Serializer,
 {
     serializer.serialize_i32(i32::from(*req_type))
+}
+
+pub(super) fn sort_mode<S>(sort_mode: &SortMode, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match sort_mode {
+        SortMode::Liked => serializer.serialize_i32(1),
+        SortMode::Recent => serializer.serialize_i32(0),
+    }
 }
 
 pub(super) fn search_filters<S>(filters: &SearchFilters, serializer: S) -> Result<S::Ok, S::Error>

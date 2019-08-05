@@ -2,16 +2,22 @@ use crate::{error::ApiError, Req};
 use gdcf::{
     api::{
         client::Response,
-        request::{LevelRequest, LevelsRequest, Request as GdcfRequest, UserRequest},
+        request::{
+            comment::{LevelCommentsRequest, ProfileCommentsRequest},
+            user::UserSearchRequest,
+            LevelRequest, LevelsRequest, Request as GdcfRequest, UserRequest,
+        },
     },
     Secondary,
 };
 use gdcf_model::{
+    comment::{CommentUser, LevelComment, ProfileComment},
     level::{Level, PartialLevel},
     song::NewgroundsSong,
-    user::{Creator, User},
+    user::{Creator, SearchedUser, User},
 };
 use gdcf_parse::Parse;
+use log::{info, trace};
 
 pub trait Handler: GdcfRequest {
     fn endpoint() -> &'static str;
@@ -132,5 +138,110 @@ impl Handler for UserRequest {
 
     fn to_req(&self) -> Req {
         Req::UserRequest(self)
+    }
+}
+
+impl Handler for UserSearchRequest {
+    fn endpoint() -> &'static str {
+        endpoint!("getGJUsers20")
+    }
+
+    fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
+        let mut sections = response_body.split('#');
+
+        match sections.next() {
+            Some(section) => Ok(Response::Exact(SearchedUser::parse_iter(section.split(':'))?)),
+            None => Err(ApiError::UnexpectedFormat),
+        }
+    }
+
+    fn to_req(&self) -> Req {
+        Req::UserSearchRequest(self)
+    }
+}
+
+impl Handler for LevelCommentsRequest {
+    fn endpoint() -> &'static str {
+        endpoint!("getGJComments21")
+    }
+
+    fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
+        let mut sections = response_body.split('#');
+
+        match sections.next() {
+            Some(section) => {
+                let mut comments = Vec::new();
+
+                for object in section.split('|') {
+                    let mut parts = object.split(':');
+
+                    if let (Some(raw_comment), Some(raw_user)) = (parts.next(), parts.next()) {
+                        trace!("Processing comment {} by user {}", raw_comment, raw_user);
+
+                        let comment = LevelComment::parse_str(raw_comment, '~')?;
+
+                        // This is the dummy placeholder object used by robtop when the player has been deleted
+                        let user = if raw_user == "1~~9~~10~~11~~14~~15~~16~" {
+                            None
+                        } else {
+                            Some(CommentUser::parse_str(raw_user, '~')?)
+                        };
+
+                        comments.push(LevelComment {
+                            user,
+                            content: comment.content,
+                            user_id: comment.user_id,
+                            likes: comment.likes,
+                            comment_id: comment.comment_id,
+                            is_flagged_spam: comment.is_flagged_spam,
+                            time_since_post: comment.time_since_post,
+                            progress: comment.progress,
+                            is_elder_mod: comment.is_elder_mod,
+                            special_color: comment.special_color,
+                        })
+                    } else {
+                        return Err(ApiError::UnexpectedFormat)
+                    }
+                }
+
+                info!("We got a total of {} comments!", comments.len());
+
+                Ok(Response::Exact(comments))
+            },
+            None => Err(ApiError::UnexpectedFormat),
+        }
+    }
+
+    fn to_req(&self) -> Req {
+        Req::LevelCommentsRequest(self)
+    }
+}
+
+impl Handler for ProfileCommentsRequest {
+    fn endpoint() -> &'static str {
+        endpoint!("getGJAccountComments20")
+    }
+
+    fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
+        let mut sections = response_body.split('#');
+
+        match sections.next() {
+            Some(section) => {
+                let mut comments = Vec::new();
+
+                for object in section.split('|') {
+                    comments.push(ProfileComment::parse_str(object, '~')?)
+                }
+
+                info!("We got a total of {} comments!", comments.len());
+
+                Ok(Response::Exact(comments))
+            },
+            None => Err(ApiError::UnexpectedFormat),
+        }
+    }
+
+    fn to_req(&self) -> Req {
+        Req::ProfileCommentsRequest(self)
     }
 }

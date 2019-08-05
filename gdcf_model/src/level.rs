@@ -16,7 +16,7 @@ use serde_derive::{Deserialize, Serialize};
 pub enum LevelLength {
     /// Enum variant that's used by the [`From<i32>`](From) impl for when an
     /// unrecognized value is passed
-    Unknown,
+    Unknown(i32),
 
     /// Tiny
     ///
@@ -60,7 +60,7 @@ pub enum LevelLength {
 pub enum LevelRating {
     /// Enum variant that's used by the [`From<i32>`](From) impl for when an
     /// unrecognized value is passed
-    Unknown,
+    Unknown(i32),
 
     /// Not Available, sometimes referred to as `N/A` or `NA`
     ///
@@ -127,7 +127,7 @@ pub enum LevelRating {
 pub enum DemonRating {
     /// Enum variant that's used by the [`From<i32>`](From) impl for when an
     /// unrecognized value is passed
-    Unknown,
+    Unknown(i32),
 
     /// Easy demon
     ///
@@ -337,6 +337,12 @@ where
     /// This value is provided at index `30`
     pub copy_of: Option<u64>,
 
+    // TODO: figure this value out
+    ///
+    /// ## GD Internals:
+    /// This value is provided at index `31`
+    pub index_31: Option<String>,
+
     /// The id of the newgrounds song this [`PartialLevel`] uses, or [`None`]
     /// if it useds a main song.
     ///
@@ -365,6 +371,12 @@ where
     /// This value is provided at index `39`, and a value of `0` means no stars
     /// were requested
     pub stars_requested: Option<u8>,
+
+    // TODO: figure this value out
+    ///
+    /// ## GD Internals:
+    /// This value is provided at index `40`
+    pub index_40: Option<String>,
 
     /// Value indicating whether this [`PartialLevel`] is epic
     ///
@@ -543,88 +555,6 @@ impl Into<i32> for Featured {
     }
 }
 
-impl From<i32> for LevelLength {
-    fn from(length: i32) -> Self {
-        match length {
-            0 => LevelLength::Tiny,
-            1 => LevelLength::Short,
-            2 => LevelLength::Medium,
-            3 => LevelLength::Long,
-            4 => LevelLength::ExtraLong,
-            _ => LevelLength::Unknown,
-        }
-    }
-}
-
-impl Into<i32> for LevelLength {
-    fn into(self) -> i32 {
-        match self {
-            LevelLength::Tiny => 0,
-            LevelLength::Short => 1,
-            LevelLength::Medium => 2,
-            LevelLength::Long => 3,
-            LevelLength::ExtraLong => 4,
-            LevelLength::Unknown => std::i32::MAX,
-        }
-    }
-}
-
-impl From<i32> for LevelRating {
-    fn from(value: i32) -> Self {
-        match value {
-            0 => LevelRating::NotAvailable,
-            10 => LevelRating::Easy,
-            20 => LevelRating::Normal,
-            30 => LevelRating::Hard,
-            40 => LevelRating::Harder,
-            50 => LevelRating::Insane,
-            _ => LevelRating::Unknown,
-        }
-    }
-}
-
-impl Into<i32> for LevelRating {
-    fn into(self) -> i32 {
-        match self {
-            LevelRating::Auto => -3,
-            LevelRating::Demon(_) => -2,
-            LevelRating::NotAvailable => -1,
-            LevelRating::Easy => 1,
-            LevelRating::Normal => 2,
-            LevelRating::Hard => 3,
-            LevelRating::Harder => 4,
-            LevelRating::Insane => 5,
-            LevelRating::Unknown => std::i32::MAX,
-        }
-    }
-}
-
-impl From<i32> for DemonRating {
-    fn from(value: i32) -> DemonRating {
-        match value {
-            10 => DemonRating::Easy,
-            20 => DemonRating::Medium,
-            30 => DemonRating::Hard,
-            40 => DemonRating::Insane,
-            50 => DemonRating::Extreme,
-            _ => DemonRating::Unknown,
-        }
-    }
-}
-
-impl Into<i32> for DemonRating {
-    fn into(self) -> i32 {
-        match self {
-            DemonRating::Easy => 1,
-            DemonRating::Medium => 2,
-            DemonRating::Hard => 3,
-            DemonRating::Insane => 4,
-            DemonRating::Extreme => 5,
-            DemonRating::Unknown => std::i32::MAX,
-        }
-    }
-}
-
 impl ToString for LevelRating {
     fn to_string(&self) -> String {
         match self {
@@ -635,7 +565,7 @@ impl ToString for LevelRating {
             LevelRating::Hard => "Hard".into(),
             LevelRating::Harder => "Harder".into(),
             LevelRating::Insane => "Insane".into(),
-            LevelRating::Unknown => "__UNKNOWN_LEVEL_RATING__".into(),
+            LevelRating::Unknown(_) => "__UNKNOWN_LEVEL_RATING__".into(),
             LevelRating::Demon(demon) => demon.to_string(),
         }
     }
@@ -651,7 +581,7 @@ impl From<String> for LevelRating {
             "Normal" => LevelRating::Normal,
             "Harder" => LevelRating::Harder,
             "Insane" => LevelRating::Harder,
-            "__UNKNOWN_LEVEL_RATING__" => LevelRating::Unknown,
+            "__UNKNOWN_LEVEL_RATING__" => LevelRating::Unknown(-1),
             _ => LevelRating::Demon(DemonRating::from(s)),
         }
     }
@@ -665,7 +595,7 @@ impl ToString for DemonRating {
             DemonRating::Hard => "HardDemon",
             DemonRating::Insane => "InsaneDemon",
             DemonRating::Extreme => "ExtremeDemon",
-            DemonRating::Unknown => "__UNKNOWN_DEMON_RATING__",
+            DemonRating::Unknown(_) => "__UNKNOWN_DEMON_RATING__",
         }
         .to_string()
     }
@@ -679,7 +609,7 @@ impl From<String> for DemonRating {
             "HardDemon" => DemonRating::Hard,
             "InsaneDemon" => DemonRating::Insane,
             "ExtremeDemon" => DemonRating::Extreme,
-            _ => DemonRating::Unknown,
+            _ => DemonRating::Unknown(-1),
         }
     }
 }
@@ -692,7 +622,7 @@ impl ToString for LevelLength {
             LevelLength::Short => "Short",
             LevelLength::Long => "Long",
             LevelLength::ExtraLong => "ExtraLong",
-            LevelLength::Unknown => "__UNKNOWN_LEVEL_LENGTH__",
+            LevelLength::Unknown(_) => "__UNKNOWN_LEVEL_LENGTH__",
         }
         .to_string()
     }
@@ -706,7 +636,7 @@ impl From<String> for LevelLength {
             "Short" => LevelLength::Short,
             "Long" => LevelLength::Long,
             "ExtraLong" => LevelLength::ExtraLong,
-            _ => LevelLength::Unknown,
+            _ => LevelLength::Unknown(-1),
         }
     }
 }

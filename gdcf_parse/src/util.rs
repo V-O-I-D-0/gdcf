@@ -3,8 +3,8 @@ use crate::{
     error::ValueError,
 };
 use base64::{DecodeError, URL_SAFE};
-use std::str::{FromStr, Utf8Error};
-use percent_encoding::{percent_encode, DEFAULT_ENCODE_SET, percent_decode};
+use gdcf_model::user::Color;
+use std::num::ParseIntError;
 
 #[derive(Debug, Clone)]
 pub struct SelfZip<I> {
