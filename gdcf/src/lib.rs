@@ -113,9 +113,8 @@ use crate::{
     },
     cache::{Cache, CacheEntry, CanCache, Lookup, Store},
     error::{ApiError, GdcfError},
-    future::GdcfStream,
 };
-use futures::{future::ok, Future, Stream};
+use futures::{future::ok, Future};
 use gdcf_model::{
     level::{Level, PartialLevel},
     song::NewgroundsSong,
@@ -123,9 +122,12 @@ use gdcf_model::{
 };
 use log::{error, info, warn};
 
-pub use crate::future::GdcfFuture;
-use crate::{api::request::user::UserSearchRequest, cache::CacheUserExt};
-use gdcf_model::user::SearchedUser;
+pub use crate::future::{GdcfFuture, GdcfStream};
+use crate::{
+    api::request::{comment::ProfileCommentsRequest, user::UserSearchRequest},
+    cache::CacheUserExt,
+};
+use gdcf_model::{comment::ProfileComment, user::SearchedUser};
 
 #[macro_use]
 mod macros;
@@ -308,6 +310,10 @@ where
             entry =>
                 if entry.is_expired() {
                     info!("Cache entry for request {} is expired!", request);
+
+                    Some(entry)
+                } else if request.forces_refresh() {
+                    info!("Cache entry is up-to-date, but request forces refresh!");
 
                     Some(entry)
                 } else {
@@ -631,7 +637,7 @@ where
     pub fn paginate_levels<Song, User>(
         &self,
         request: impl Into<LevelsRequest>,
-    ) -> Result<impl Stream<Item = CacheEntry<Vec<PartialLevel<Song, User>>, C::CacheEntryMeta>, Error = GdcfError<A::Err, C::Err>>, C::Err>
+    ) -> Result<GdcfStream<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>, Self>, C::Err>
     where
         Self: ProcessRequest<A, C, LevelsRequest, Vec<PartialLevel<Song, User>>>,
         Song: PartialEq,

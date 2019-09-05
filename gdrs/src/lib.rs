@@ -15,9 +15,14 @@ use crate::{
     handle::Handler,
     ser::{LevelCommentsRequestRem, LevelRequestRem, LevelsRequestRem, ProfileCommentsRequestRem, UserRequestRem, UserSearchRequestRem},
 };
-use futures::{future::Executor, Future, Stream};
+use failure::_core::marker::PhantomData;
+use futures::{
+    future::{Executor, FromErr},
+    stream::Concat2,
+    Async, Future, Stream,
+};
 use gdcf::api::{
-    client::{ApiFuture, MakeRequest, Response},
+    client::{MakeRequest, Response},
     request::{
         comment::{LevelCommentsRequest, ProfileCommentsRequest},
         level::{LevelRequest, LevelsRequest},
@@ -27,17 +32,14 @@ use gdcf::api::{
     ApiClient,
 };
 use hyper::{
-    client::{Builder, HttpConnector},
+    client::{Builder, HttpConnector, ResponseFuture},
     header::HeaderValue,
     Body, Client, Method, Request, StatusCode,
 };
 use log::{debug, error, info, trace, warn};
 use serde_derive::Serialize;
-use std::str;
-use tokio_retry::{
-    strategy::{jitter, ExponentialBackoff},
-    Action, Condition, Error as RetryError, RetryIf,
-};
+use std::{iter::Take, mem, str};
+use tokio_retry::{strategy::ExponentialBackoff, Action, Condition, RetryIf};
 
 #[macro_use]
 mod macros;
@@ -72,6 +74,20 @@ pub struct BoomlingsClient {
     client: Client<HttpConnector>,
 }
 
+#[allow(missing_debug_implementations)]
+pub struct GdrsFuture<R: Handler> {
+    inner: FromErr<RetryIf<Take<ExponentialBackoff>, ApiRequestAction<R>, ApiRetryCondition>, ApiError>,
+}
+
+impl<R: Handler> Future for GdrsFuture<R> {
+    type Error = ApiError;
+    type Item = Response<R::Result>;
+
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        self.inner.poll()
+    }
+}
+
 impl BoomlingsClient {
     pub fn new() -> BoomlingsClient {
         info!("Creating new BoomlingsApiClient");
@@ -93,25 +109,25 @@ impl ApiClient for BoomlingsClient {
     type Err = ApiError;
 }
 
-impl<R: GdcfRequest + Handler> MakeRequest<R> for BoomlingsClient {
-    fn make(&self, request: R) -> ApiFuture<R, ApiError> {
-        let action = ApiRequestAction {
-            client: self.client.clone(),
-            request,
-        };
+impl<R: Handler> MakeRequest<R> for BoomlingsClient {
+    type Future = GdrsFuture<R>;
 
-        let retry = ExponentialBackoff::from_millis(10).map(jitter).take(5);
-
-        Box::new(RetryIf::spawn(retry, action, ApiRetryCondition).map_err(|err| {
-            match err {
-                RetryError::OperationError(e) => e,
-                _ => unimplemented!(),
-            }
-        }))
+    fn make(&self, request: R) -> GdrsFuture<R> {
+        GdrsFuture {
+            inner: RetryIf::spawn(
+                ExponentialBackoff::from_millis(10).take(5),
+                ApiRequestAction {
+                    client: self.client.clone(),
+                    request,
+                },
+                ApiRetryCondition,
+            )
+            .from_err(),
+        }
     }
 }
 
-struct ApiRequestAction<R: GdcfRequest + Handler> {
+struct ApiRequestAction<R: Handler> {
     client: Client<HttpConnector>,
     request: R,
 }
@@ -130,46 +146,81 @@ impl Condition<ApiError> for ApiRetryCondition {
     }
 }
 
-impl<R: GdcfRequest + Handler> Action for ApiRequestAction<R> {
+enum ProcessRequestFuture<R: Handler> {
+    WaitingForResponse(ResponseFuture, PhantomData<R>),
+    ProcessingResponse(Concat2<Body>),
+}
+
+impl<R: Handler> Future for ProcessRequestFuture<R> {
     type Error = ApiError;
-    type Future = ApiFuture<R, ApiError>;
     type Item = Response<R::Result>;
 
-    fn run(&mut self) -> ApiFuture<R, ApiError> {
-        let future = self
-            .client
-            .request(make_request(&self.request))
-            .map_err(ApiError::Custom)
-            .and_then(|resp| {
-                debug!("Received {} response", resp.status());
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        let response_poll_result = match self {
+            ProcessRequestFuture::WaitingForResponse(response_future, _) =>
+                match response_future.poll() {
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(err) => {
+                        error!("Error making request: {:?}", err);
 
-                match resp.status() {
-                    StatusCode::INTERNAL_SERVER_ERROR => Err(ApiError::InternalServerError),
-                    StatusCode::NOT_FOUND => Err(ApiError::NoData),
-                    _ => Ok(resp),
-                }
-            })
-            .and_then(move |resp| {
-                resp.into_body()
-                    .concat2()
-                    .map_err(ApiError::Custom)
-                    .and_then(move |body| {
-                        match str::from_utf8(&body) {
-                            Ok(body) => {
-                                trace!("Received response {}", body);
+                        return Err(ApiError::Custom(err))
+                    },
+                    Ok(Async::Ready(response)) => {
+                        debug!("Received {} response", response.status());
 
-                                R::handle(&body)
-                            },
-                            Err(_) => Err(ApiError::UnexpectedFormat),
+                        match response.status() {
+                            StatusCode::INTERNAL_SERVER_ERROR => return Err(ApiError::InternalServerError),
+                            StatusCode::NOT_FOUND => return Err(ApiError::NoData),
+                            _ => (),
                         }
-                    })
-                    .map_err(|err| {
-                        error!("Error processing request: {}", err);
-                        err
-                    })
-            });
 
-        Box::new(future)
+                        let mut body = response.into_body().concat2();
+                        let poll_result = body.poll();
+                        mem::replace(self, ProcessRequestFuture::ProcessingResponse(body));
+                        poll_result
+                    },
+                },
+            ProcessRequestFuture::ProcessingResponse(body) => body.poll(),
+        };
+
+        match response_poll_result {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(err) => {
+                error!("Error reading/processing request response {:?}", err);
+
+                return Err(ApiError::Custom(err))
+            },
+            Ok(Async::Ready(chunk)) =>
+                match str::from_utf8(&chunk) {
+                    Ok(body) => {
+                        trace!("Received response {}", body);
+
+                        match R::handle(&body) {
+                            Err(err) => {
+                                error!("Error processing body: {:?}", err);
+
+                                Err(err)
+                            },
+                            Ok(object) => Ok(Async::Ready(object))
+                        }
+                    },
+                    Err(err) => {
+                        error!("Encoding error in response! {:?}", err);
+
+                        Err(ApiError::UnexpectedFormat)
+                    },
+                },
+        }
+    }
+}
+
+impl<R: GdcfRequest + Handler> Action for ApiRequestAction<R> {
+    type Error = ApiError;
+    type Future = ProcessRequestFuture<R>;
+    type Item = Response<R::Result>;
+
+    fn run(&mut self) -> Self::Future {
+        ProcessRequestFuture::WaitingForResponse(self.client.request(make_request(&self.request)), PhantomData)
     }
 }
 
