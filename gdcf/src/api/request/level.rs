@@ -555,7 +555,7 @@ impl From<u64> for LevelRequest {
 }
 
 impl Request for LevelRequest {
-    type Result = Level<u64, u64>;
+    type Result = Level<Option<u64>, u64>;
 
     fn key(&self) -> u64 {
         self.level_id
@@ -564,19 +564,27 @@ impl Request for LevelRequest {
     fn forces_refresh(&self) -> bool {
         self.force_refresh
     }
+
+    fn set_force_refresh(&mut self, force_refresh: bool) {
+        self.force_refresh = force_refresh
+    }
 }
 
 impl Request for LevelsRequest {
-    type Result = Vec<PartialLevel<u64, u64>>;
+    type Result = Vec<PartialLevel<Option<u64>, u64>>;
 
     fn forces_refresh(&self) -> bool {
         self.force_refresh
     }
+
+    fn set_force_refresh(&mut self, force_refresh: bool) {
+        self.force_refresh = force_refresh
+    }
 }
 
 impl PaginatableRequest for LevelsRequest {
-    fn next(&self) -> Self {
-        self.clone().page(self.page + 1)
+    fn next(&mut self) {
+        self.page += 1;
     }
 }
 

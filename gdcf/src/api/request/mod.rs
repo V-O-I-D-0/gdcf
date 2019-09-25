@@ -101,7 +101,7 @@ impl Default for BaseRequest {
 /// may only be hashed if they are explicitly set to a value, to ensure the
 /// above-mentioned compatibility
 pub trait Request: Display + Hash + Clone + Send + Sync + 'static {
-    type Result: Send + Sync + 'static;
+    type Result: std::fmt::Debug + Send + Sync + 'static;
 
     fn key(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -110,8 +110,9 @@ pub trait Request: Display + Hash + Clone + Send + Sync + 'static {
     }
 
     fn forces_refresh(&self) -> bool;
+    fn set_force_refresh(&mut self, force_refresh: bool);
 }
 
 pub trait PaginatableRequest: Request {
-    fn next(&self) -> Self;
+    fn next(&mut self);
 }

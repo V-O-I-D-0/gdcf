@@ -86,7 +86,7 @@ pub fn level_password(encrypted: &str) -> Result<Password, DecodeError> {
 }
 
 parser! {
-    PartialLevel<u64, u64> => {
+    PartialLevel<Option<u64>, u64> => {
         level_id(index = 1),
         name(index = 2),
         description(index = 3, parse_infallible = Base64Converter, default),
@@ -144,7 +144,7 @@ fn extract_is_na(rating: LevelRating) -> String {
 }
 
 parser! {
-    Level<u64, u64> => {
+    Level<Option<u64>, u64> => {
         base(delegate),
         level_data(index = 4, parse = Base64BytesConverter),
         password(index = 27),

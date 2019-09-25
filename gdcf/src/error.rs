@@ -9,10 +9,13 @@ pub trait ApiError: Fail {
 pub trait CacheError: Fail {}
 
 #[derive(Debug, Fail)]
-pub enum GdcfError<A: ApiError, C: CacheError> {
+pub enum Error<A: ApiError, C: CacheError> {
     #[fail(display = "{}", _0)]
     Cache(#[cause] C),
 
     #[fail(display = "{}", _0)]
     Api(#[cause] A),
+
+    #[fail(display = "GDCF made an assumption about server sided data consistency, which was violated. Please open a bug report")]
+    UnexpectedlyAbsent,
 }
