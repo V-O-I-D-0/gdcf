@@ -360,9 +360,11 @@ macro_rules! diesel_stuff {
 
         /*
         Alright, so
+
         Wrapped( $rust_ty {
             ...
         })
+
         doesn't work because macro variables are weird like that, so we need this very noisy workaround
         */
         trait __ConstructExt {

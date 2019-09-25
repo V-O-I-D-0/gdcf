@@ -159,8 +159,8 @@ impl gdcf::cache::Cache for Cache {
 // TODO: in the future we can probably make these macro-generated as well, but for now we only have
 // one of them, so its fine
 
-impl Lookup<Vec<PartialLevel<u64, u64>>> for Cache {
-    fn lookup(&self, key: u64) -> Result<CacheEntry<Vec<PartialLevel<u64, u64>>, Entry>, Self::Err> {
+impl Lookup<Vec<PartialLevel<Option<u64>, u64>>> for Cache {
+    fn lookup(&self, key: u64) -> Result<CacheEntry<Vec<PartialLevel<Option<u64>, u64>>, Entry>, Self::Err> {
         use crate::partial_level::*;
         use diesel::JoinOnDsl;
 
@@ -176,20 +176,24 @@ impl Lookup<Vec<PartialLevel<u64, u64>>> for Cache {
             return Ok(CacheEntry::MarkedAbsent(entry))
         }
 
-        let levels = handle_missing!(partial_level::table
-            .inner_join(request_results::table.on(partial_level::level_id.eq(request_results::level_id)))
-            .filter(request_results::request_hash.eq(key as i64))
+        let levels: Vec<_> = handle_missing!(partial_level::table
+            .inner_join(level_request_results::table.on(partial_level::level_id.eq(level_request_results::level_id)))
+            .filter(level_request_results::request_hash.eq(key as i64))
             .select(partial_level::all_columns)
             .load(&connection))
         .into_iter()
         .map(|row: Wrapped<_>| row.0)
         .collect();
 
-        Ok(CacheEntry::new(levels, entry))
+        if levels.is_empty() {
+            Ok(CacheEntry::DeducedAbsent)
+        } else {
+            Ok(CacheEntry::new(levels, entry))
+        }
     }
 }
 
-impl Store<Vec<PartialLevel<u64, u64>>> for Cache {
+impl Store<Vec<PartialLevel<Option<u64>, u64>>> for Cache {
     fn mark_absent(&mut self, key: u64) -> Result<Entry, Self::Err> {
         use crate::partial_level::*;
 
@@ -202,21 +206,21 @@ impl Store<Vec<PartialLevel<u64, u64>>> for Cache {
         Ok(entry)
     }
 
-    fn store(&mut self, partial_levels: &Vec<PartialLevel<u64, u64>>, key: u64) -> Result<Self::CacheEntryMeta, Self::Err> {
+    fn store(&mut self, partial_levels: &Vec<PartialLevel<Option<u64>, u64>>, key: u64) -> Result<Self::CacheEntryMeta, Self::Err> {
         use crate::partial_level::*;
 
         debug!("Storing result of LevelsRequest with key {}", key);
 
         let conn = self.pool.get()?;
 
-        diesel::delete(request_results::table)
-            .filter(request_results::request_hash.eq(key as i64))
+        diesel::delete(level_request_results::table)
+            .filter(level_request_results::request_hash.eq(key as i64))
             .execute(&conn)?;
 
         for level in partial_levels {
             self.store(level, level.level_id)?;
 
-            diesel::insert_into(request_results::table)
+            diesel::insert_into(level_request_results::table)
                 .values((level.level_id, key))
                 .execute(&conn)?;
         }

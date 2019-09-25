@@ -233,11 +233,7 @@ pub enum Password {
 /// `41`, `44`
 #[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub struct PartialLevel<Song, User>
-where
-    Song: PartialEq,
-    User: PartialEq,
-{
+pub struct PartialLevel<Song, User> {
     /// The [`Level`]'s unique level id
     ///
     /// ## GD Internals:
@@ -349,7 +345,7 @@ where
     /// ## GD Internals:
     /// This value is provided at index `35`, and a value of `0` means, that no
     /// custom song is used.
-    pub custom_song: Option<Song>,
+    pub custom_song: Song,
 
     /// The amount of coints in this [`PartialLevel`]
     ///
@@ -414,7 +410,7 @@ where
     pub index_47: Option<String>,
 }
 
-impl<Song: PartialEq, User: PartialEq> PartialLevel<Song, User> {
+impl<Song, User> PartialLevel<Song, User> {
     pub fn is_auto(&self) -> bool {
         self.difficulty == LevelRating::Auto
     }
@@ -431,6 +427,7 @@ impl<Song: PartialEq, User: PartialEq> PartialLevel<Song, User> {
     }
 }
 
+// TODO: Consider having only one type parameter that is used as the type for `base`
 /// Struct representing full levels, extending [`PartialLevel`] with the fields
 /// only retrieved when fully downloading a level.
 ///
@@ -444,11 +441,7 @@ impl<Song: PartialEq, User: PartialEq> PartialLevel<Song, User> {
 /// `41`, `44`
 #[derive(Debug, Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "serde_support", derive(Serialize))]
-pub struct Level<Song, User>
-where
-    Song: PartialEq,
-    User: PartialEq,
-{
+pub struct Level<Song, User> {
     /// The [`PartialLevel`] this [`Level`] instance supplements
     pub base: PartialLevel<Song, User>,
 
@@ -492,21 +485,13 @@ where
     pub index_36: String,
 }
 
-impl<Song, User> Display for PartialLevel<Song, User>
-where
-    Song: PartialEq,
-    User: PartialEq,
-{
+impl<Song, User> Display for PartialLevel<Song, User> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         write!(f, "PartialLevel({}, {})", self.level_id, self.name)
     }
 }
 
-impl<Song, User> Display for Level<Song, User>
-where
-    Song: PartialEq,
-    User: PartialEq,
-{
+impl<Song, User> Display for Level<Song, User> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         write!(f, "Level({}, {})", self.base.level_id, self.base.name)
     }

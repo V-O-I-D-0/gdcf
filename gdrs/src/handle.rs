@@ -28,7 +28,7 @@ pub trait Handler: GdcfRequest {
 
 impl Handler for LevelRequest {
     fn endpoint() -> &'static str {
-        endpoint!("downloadGJLevel19")
+        endpoint!("downloadGJLevel22")
     }
 
     fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
@@ -49,7 +49,7 @@ impl Handler for LevelRequest {
 
 impl Handler for LevelsRequest {
     fn endpoint() -> &'static str {
-        endpoint!("getGJLevels19")
+        endpoint!("getGJLevels21")
     }
 
     fn handle(response_body: &str) -> Result<Response<Self::Result>, ApiError> {
@@ -58,7 +58,7 @@ impl Handler for LevelsRequest {
         let mut other = Vec::new();
         let mut sections = response_body.split('#');
 
-        let levels: Vec<PartialLevel<u64, u64>> = match sections.next() {
+        let levels: Vec<PartialLevel<Option<u64>, u64>> = match sections.next() {
             Some(section) =>
                 section
                     .split('|')

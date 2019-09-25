@@ -1,6 +1,6 @@
 macro_rules! endpoint {
     ($php:expr) => {
-        concat!("http://absolllute.com/gdps/gdapi/", $php, ".php")
+        concat!("http://www.boomlings.com/database/", $php, ".php")
     };
 }
 

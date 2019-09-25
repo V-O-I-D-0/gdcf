@@ -22,7 +22,7 @@ pub enum SortMode {
     Recent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct LevelCommentsRequest {
     /// Whether this [`LevelCommentsRequest`] request forces a cache refresh. This is not a HTTP
     /// request field!
@@ -123,41 +123,17 @@ impl Request for LevelCommentsRequest {
     fn forces_refresh(&self) -> bool {
         self.force_refresh
     }
+
+    fn set_force_refresh(&mut self, force_refresh: bool) {
+        self.force_refresh = force_refresh
+    }
 }
 
 impl PaginatableRequest for LevelCommentsRequest {
-    fn next(&self) -> Self {
-        LevelCommentsRequest {
-            page: self.page + 1,
-            ..*self
-        }
+    fn next(&mut self) {
+        self.page += 1;
     }
 }
-// FIXME: figure out these impls
-/*
-impl<S: PartialEq, U: PartialEq> Into<LevelCommentsRequest> for PartialLevel<S, U> {
-    fn into(self) -> LevelCommentsRequest {
-        LevelCommentsRequest::new(self.level_id)
-    }
-}
-
-impl<S: PartialEq, U: PartialEq> Into<LevelCommentsRequest> for Level<S, U> {
-    fn into(self) -> LevelCommentsRequest {
-        LevelCommentsRequest::new(self.level_id)
-    }
-}
-
-impl<S: PartialEq, U: PartialEq> Into<LevelCommentsRequest> for &PartialLevel<S, U> {
-    fn into(self) -> LevelCommentsRequest {
-        LevelCommentsRequest::new(self.level_id)
-    }
-}
-
-impl<S: PartialEq, U: PartialEq> Into<LevelCommentsRequest> for &Level<S, U> {
-    fn into(self) -> LevelCommentsRequest {
-        LevelCommentsRequest::new(self.level_id)
-    }
-}*/
 
 impl Into<LevelCommentsRequest> for u64 {
     fn into(self) -> LevelCommentsRequest {
@@ -165,7 +141,7 @@ impl Into<LevelCommentsRequest> for u64 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct ProfileCommentsRequest {
     /// Whether this [`ProfileCommentsRequest`] request forces a cache refresh. This is not a HTTP
     /// request field!
@@ -238,13 +214,14 @@ impl Request for ProfileCommentsRequest {
     fn forces_refresh(&self) -> bool {
         self.force_refresh
     }
+
+    fn set_force_refresh(&mut self, force_refresh: bool) {
+        self.force_refresh = force_refresh
+    }
 }
 
 impl PaginatableRequest for ProfileCommentsRequest {
-    fn next(&self) -> Self {
-        ProfileCommentsRequest {
-            page: self.page + 1,
-            ..*self
-        }
+    fn next(&mut self) {
+        self.page += 1;
     }
 }

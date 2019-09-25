@@ -1,15 +1,12 @@
 use crate::{
     convert::{Base64BytesConverter, Base64Converter, RobtopFrom, RobtopInto},
     error::ValueError,
-    util::{encode_url, b64_decode_string},
     Parse,
 };
-use base64::{DecodeError, URL_SAFE};
 use gdcf_model::{
-    level::{DemonRating, Featured, Level, LevelLength, LevelRating, PartialLevel, Password},
+    level::{DemonRating, Level, LevelRating, PartialLevel},
     song::{MainSong, MAIN_SONGS, UNKNOWN},
 };
-use std::num::ParseIntError;
 
 pub mod data;
 pub mod object;
@@ -33,60 +30,8 @@ pub fn process_song(main_song: usize, custom_song: &Option<u64>) -> Option<&'sta
     }
 }
 
-pub fn parse_description(value: &str) -> Option<String> {
-    // i mean like, yes?
-    match b64_decode_string(&encode_url(value).unwrap()) {
-        Err(_e) => Some(value.to_string()),
-        Ok(f) => Some(f)
-    }
-}
-
-pub fn parse_featured(value: &str) -> Result<Featured, ParseIntError> {
-    match value {
-        "-1" => Ok(Featured::Unfeatured),
-        "0" => Ok(Featured::NotFeatured),
-        other => other.parse().map(Featured::Featured),
-    }
-}
-
-pub fn parse_level_length(value: &str) -> LevelLength {
-    match value {
-        "0" => LevelLength::Tiny,
-        "1" => LevelLength::Short,
-        "2" => LevelLength::Medium,
-        "3" => LevelLength::Long,
-        "4" => LevelLength::ExtraLong,
-        _ => LevelLength::Unknown,
-    }
-}
-
-/// Attempts to parse the given `str` into a [`Password`]
-///
-/// # Errors
-/// If the given string isn't `"0"` and also isn't valid URL-safe base64, a
-/// [`DecodeError`] is returned
-pub fn level_password(encrypted: &str) -> Result<Password, DecodeError> {
-    match encrypted {
-        "0" => Ok(Password::NoCopy),
-        pass => {
-
-            let mut pass_str = pass.to_owned();
-            // on 1.9 passwords aren't encoded
-            // let decoded = b64_decode_string(pass)?;
-            //let mut decrypted = xor_decrypt(&decoded, "26364");
-
-            if pass_str.len() == 1 {
-                Ok(Password::FreeCopy)
-            } else {
-                pass_str.remove(0);
-                Ok(Password::PasswordCopy(pass_str))
-            }
-        },
-    }
-}
-
 parser! {
-    PartialLevel<u64, u64> => {
+    PartialLevel<Option<u64>, u64> => {
         level_id(index = 1),
         name(index = 2),
         description(index = 3, parse_infallible = Base64Converter, default),
@@ -144,7 +89,7 @@ fn extract_is_na(rating: LevelRating) -> String {
 }
 
 parser! {
-    Level<u64, u64> => {
+    Level<Option<u64>, u64> => {
         base(delegate),
         level_data(index = 4, parse = Base64BytesConverter),
         password(index = 27),

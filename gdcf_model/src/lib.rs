@@ -6,9 +6,6 @@ pub mod level;
 pub mod song;
 pub mod user;
 
-#[macro_use]
-extern crate serde_derive;
-
 #[cfg(feature = "serde_support")]
 use serde_derive::{Deserialize, Serialize};
 use std::{
