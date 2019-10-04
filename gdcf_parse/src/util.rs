@@ -33,57 +33,6 @@ pub trait SelfZipExt: Iterator {
 
 impl<I> SelfZipExt for I where I: Iterator {}
 
-pub fn default_to_none<T>(value: T) -> Option<T>
-where
-    T: FromStr + Default + PartialEq,
-{
-    if value == Default::default() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-/// Converts the given `u8` into a `bool` by returning `true` if `value !=
-/// 0`, and `false` otherwise
-pub const fn int_to_bool(value: u8) -> bool {
-    value != 0
-}
-
-pub fn into_option<T>(value: T) -> Option<T> {
-    Some(value)
-}
-
-/// Encodes string into percent-encode
-/// # Errors
-/// idk
-pub fn encode_url(decoded: &str) -> Result<String, Utf8Error> {
-    let utf8_cow = percent_encode(decoded.as_bytes(), DEFAULT_ENCODE_SET);
-
-    Ok(utf8_cow.to_string())
-}
-
-/// Takes a percent-encoded URL and decodes it
-///
-/// # Errors
-/// If the decoded data cannot be put together as UTF8, an [`Utf8Error`] is
-/// returned
-pub fn decode_url(encoded: &str) -> Result<String, Utf8Error> {
-    let utf8_cow = percent_decode(encoded.as_bytes()).decode_utf8()?;
-
-    Ok(utf8_cow.to_string())
-}
-
-/// Performs URL-safe base64 decoding on the given [`str`] and returns the
-/// decoded bytes
-///
-/// # Errors
-/// If the given string isn't valid URL-safe base64, an [`DecodeError`] is
-/// returned
-pub fn b64_decode_bytes(encoded: &str) -> Result<Vec<u8>, DecodeError> {
-    base64::decode_config(encoded, URL_SAFE)
-}
-
 /// Performs URL-safe base64 decoding on the given [`str`] and tries to
 /// build a UTF8 String from the resulting bytes.
 ///
