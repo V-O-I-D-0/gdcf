@@ -363,26 +363,4 @@ where
     {
         GdcfStream::new(self.clone(), request.into())
     }
-
-    pub fn profile_comments(
-        &self,
-        request: impl Into<ProfileCommentsRequest>,
-    ) -> Result<ProcessRequestFuture<ProfileCommentsRequest, A, C>, C::Err>
-    where
-        A: MakeRequest<ProfileCommentsRequest>,
-        C: CanCache<ProfileCommentsRequest>,
-    {
-        ProcessRequestFuture::new(self.clone(), &request.into())
-    }
-
-    pub fn paginate_profile_comments(
-        &self,
-        request: impl Into<ProfileCommentsRequest>,
-    ) -> Result<GdcfStream<ProcessRequestFuture<ProfileCommentsRequest, A, C>>, C::Err>
-    where
-        A: MakeRequest<ProfileCommentsRequest>,
-        C: CanCache<ProfileCommentsRequest>,
-    {
-        GdcfStream::new(self.clone(), request.into())
-    }
 }
