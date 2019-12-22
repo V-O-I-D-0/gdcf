@@ -8,23 +8,14 @@
 //! request types, as there are simply no sensible defaults. When providing
 //! (de)serialization for requests, take a look at solutions like serde's
 //! remote types.
-//!
-//! Note that all `Hash` impls are to be forward compatible with new fields in
-//! the request. This means, that if an update to the GD API arrives which adds
-//! more fields to a request, those fields are hashed _only_ if they are
-//! different from their default values. This way, the hashes of requests made
-//! before the update will stay the same
 
 pub use self::{
+    comment::{LevelCommentsRequest, ProfileCommentsRequest},
     level::{LevelRequest, LevelRequestType, LevelsRequest, SearchFilters, SongFilter},
-    user::UserRequest,
+    user::{UserRequest, UserSearchRequest},
 };
 use gdcf_model::GameVersion;
-use std::{
-    collections::hash_map::DefaultHasher,
-    fmt::Display,
-    hash::{Hash, Hasher},
-};
+use std::{fmt::Debug, hash::Hash};
 
 pub mod comment;
 pub mod level;
@@ -89,31 +80,23 @@ impl Default for BaseRequest {
 }
 
 /// Trait for types that are meant to be requests whose results can be cached
-/// by GDCF
-///
-/// A `Request`'s `Hash` result must be forward-compatible with new fields
-/// added to a request. This means that if the GD API adds a new fields to a
-/// requests, making a request without this fields should generate the same
-/// hash value as the same request in
-/// an old version of GDCF without the field in the first place.
-/// This means foremost, that `Hash` impls mustn't hash the `BaseRequest`
-/// they're built upon. If new fields are added in later version of GDCF, they
-/// may only be hashed if they are explicitly set to a value, to ensure the
-/// above-mentioned compatibility
-pub trait Request: Display + Hash + Clone + Send + Sync + 'static {
-    type Result: std::fmt::Debug + Send + Sync + 'static;
-
-    fn key(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn forces_refresh(&self) -> bool;
-    fn set_force_refresh(&mut self, force_refresh: bool);
+/// by GDCF.
+pub trait Request: Debug + Send + Sync + 'static {
+    /// The type of object returned by this request.
+    ///
+    /// For requests that return multiple types of objects (like [`LevelsRequest`], which returns
+    /// levels, songs and creators), this is the non-[`Secondary`] object returned by this request
+    /// (so the vector of [`PartialLevel`]s in the above example) .
+    type Result: Debug + Send + Sync + 'static;
 }
 
+/// Trait for requests that can be seen as returning pages of objects.
+///
+/// In general, these are requests like [`LevelsRequest`], which returns pages of levels. However,
+/// also requests like [`LevelRequest`] can be seen as paginatable (and does in fact implement this
+/// trait) because we can interpret a level with some level ID `n` to be the `n-`th page of the
+/// request.
 pub trait PaginatableRequest: Request {
+    /// Modifies this request in-place to be a request for the next page
     fn next(&mut self);
-    fn page(&mut self, page: u32);
 }

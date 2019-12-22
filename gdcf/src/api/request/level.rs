@@ -14,10 +14,6 @@ use std::{
 /// with the response to a [`LevelsRequest`]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LevelRequest {
-    /// Whether this [`LevelRequest`] request forces a cache refresh. This is not a HTTP
-    /// request field!
-    pub force_refresh: bool,
-
     /// The base request data
     pub base: BaseRequest,
 
@@ -57,10 +53,6 @@ impl Hash for LevelRequest {
 /// [`NewgroundsSong`s](::model::song::NewgroundsSong) and [`Creator`s](::model::user::Creator).
 #[derive(Debug, Default, Clone)]
 pub struct LevelsRequest {
-    /// Whether this [`LevelsRequest`] request forces a cache refresh. This is not a HTTP
-    /// request field!
-    pub force_refresh: bool,
-
     /// The base request data
     pub base: BaseRequest,
 
@@ -458,11 +450,6 @@ impl LevelRequest {
         extra: bool
     }
 
-    pub const fn force_refresh(mut self) -> Self {
-        self.force_refresh = true;
-        self
-    }
-
     /// Constructs a new `LevelRequest` to retrieve the level with the given id
     ///
     /// Uses a default [`BaseRequest`], and sets the
@@ -470,7 +457,6 @@ impl LevelRequest {
     /// values set the by the Geometry Dash Client
     pub const fn new(level_id: u64) -> LevelRequest {
         LevelRequest {
-            force_refresh: false,
             base: GD_21,
             level_id,
             inc: true,
@@ -485,14 +471,11 @@ impl LevelsRequest {
     // idk why this one can't be const
     setter!(filter, search_filters, SearchFilters);
 
-    const_setter!(total, i32);
+    const_setter!(total: i32);
 
-    const_setter!(request_type, LevelRequestType);
+    const_setter!(request_type: LevelRequestType);
 
-    pub const fn force_refresh(mut self) -> Self {
-        self.force_refresh = true;
-        self
-    }
+    const_setter!(page: u32);
 
     pub fn search(mut self, search_string: String) -> Self {
         self.search_string = search_string;
@@ -554,39 +537,21 @@ impl From<u64> for LevelRequest {
 
 impl Request for LevelRequest {
     type Result = Level<Option<u64>, u64>;
+}
 
-    fn key(&self) -> u64 {
-        self.level_id
-    }
-
-    fn forces_refresh(&self) -> bool {
-        self.force_refresh
-    }
-
-    fn set_force_refresh(&mut self, force_refresh: bool) {
-        self.force_refresh = force_refresh
+impl PaginatableRequest for LevelRequest {
+    fn next(&mut self) {
+        self.level_id += 1;
     }
 }
 
 impl Request for LevelsRequest {
     type Result = Vec<PartialLevel<Option<u64>, u64>>;
-
-    fn forces_refresh(&self) -> bool {
-        self.force_refresh
-    }
-
-    fn set_force_refresh(&mut self, force_refresh: bool) {
-        self.force_refresh = force_refresh
-    }
 }
 
 impl PaginatableRequest for LevelsRequest {
     fn next(&mut self) {
         self.page += 1;
-    }
-
-    fn page(&mut self, page: u32) {
-        self.page = page;
     }
 }
 

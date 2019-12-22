@@ -1,6 +1,9 @@
+//! Module containing the trait an API client would have to implement to be usable with GDCF
+
 use futures::Future;
 
 use crate::{api::request::Request, error::ApiError, Secondary};
+use std::fmt::Debug;
 
 pub trait ApiClient: Clone + Sized + Sync + Send + 'static {
     type Err: ApiError;
@@ -15,5 +18,5 @@ pub enum Response<T> {
 pub trait MakeRequest<R: Request>: ApiClient {
     type Future: Future<Item = Response<R::Result>, Error = Self::Err> + Send + 'static;
 
-    fn make(&self, request: &R) -> Self::Future; //ApiFuture<R, Self::Err>;
+    fn make(&self, request: &R) -> Self::Future;
 }

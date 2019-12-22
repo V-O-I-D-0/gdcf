@@ -6,6 +6,7 @@ use diesel::{
     sql_types::{Int8, Nullable, Text},
     ExpressionMethods, Queryable,
 };
+use gdcf::cache::CreatorKey;
 use gdcf_model::user::Creator;
 
 impl<'a> Identifiable for &'a Wrapped<Creator> {
@@ -25,5 +26,5 @@ diesel_stuff! {
 }
 meta_table!(creator_meta, user_id);
 
-store_simply!(Creator, creator, creator_meta, user_id);
-lookup_simply!(Creator, creator, creator_meta, user_id);
+store_simply!(CreatorKey, creator, creator_meta, user_id);
+lookup_simply!(CreatorKey, creator, creator_meta, user_id);

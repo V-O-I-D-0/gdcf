@@ -1,4 +1,4 @@
-use crate::wrap::Wrapped;
+use crate::{key::PartialLevelKey, wrap::Wrapped};
 use diesel::{backend::Backend, deserialize::FromSqlRow, insertable::Insertable, ExpressionMethods, Queryable};
 use gdcf_model::{
     level::{Featured, LevelLength, LevelRating, PartialLevel},
@@ -38,8 +38,8 @@ diesel_stuff! {
 // Metadata table storing information about when a partial level was cached
 meta_table!(partial_level_meta, level_id);
 
-store_simply!(PartialLevel<Option<u64>, u64>, partial_level, partial_level_meta, level_id);
-lookup_simply!(PartialLevel<Option<u64>, u64>, partial_level, partial_level_meta, level_id);
+store_simply!(PartialLevelKey, partial_level, partial_level_meta, level_id);
+lookup_simply!(PartialLevelKey, partial_level, partial_level_meta, level_id);
 
 // Metadata table associating the hashes of cached requests with the level ids the requested
 // returned
@@ -51,7 +51,7 @@ table! {
 }
 
 // # WTF
-impl Insertable<level_request_results::table> for (u64, u64) {
+impl Insertable<level_request_results::table> for (i64, i64) {
     type Values = <(
         diesel::dsl::Eq<level_request_results::level_id, i64>,
         diesel::dsl::Eq<level_request_results::request_hash, i64>,

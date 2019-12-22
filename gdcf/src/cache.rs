@@ -1,4 +1,8 @@
+//! Module containing cache related traits/structs
+
 use crate::{api::request::Request, error::CacheError};
+use derive_more::Display;
+use gdcf_model::{song::NewgroundsSong, user::Creator};
 use std::fmt::{Display, Formatter};
 
 pub trait Cache: Clone + Send + Sync + 'static {
@@ -6,34 +10,49 @@ pub trait Cache: Clone + Send + Sync + 'static {
     type Err: CacheError;
 }
 
-pub trait Lookup<Obj>: Cache {
-    fn lookup(&self, key: u64) -> Result<CacheEntry<Obj, Self::CacheEntryMeta>, Self::Err>;
+#[derive(Debug, Display)]
+pub struct NewgroundsSongKey(pub u64);
+
+#[derive(Debug, Display)]
+pub struct CreatorKey(pub u64);
+
+pub trait Key {
+    type Result;
 }
 
-pub trait Store<Obj>: Cache {
-    fn store(&mut self, obj: &Obj, key: u64) -> Result<Self::CacheEntryMeta, Self::Err>;
-    fn mark_absent(&mut self, key: u64) -> Result<Self::CacheEntryMeta, Self::Err>;
+impl<R: Request> Key for R {
+    type Result = <R as Request>::Result;
 }
 
-// TODO: make this private
-pub trait CanCache<R: Request>: Cache + Lookup<R::Result> + Store<R::Result> {
-    fn lookup_request(&self, request: &R) -> Result<CacheEntry<R::Result, Self::CacheEntryMeta>, Self::Err> {
-        self.lookup(request.key())
-    }
+impl Key for NewgroundsSongKey {
+    type Result = NewgroundsSong;
 }
 
-impl<R: Request, C: Cache> CanCache<R> for C where C: Lookup<R::Result> + Store<R::Result> {}
+impl Key for CreatorKey {
+    type Result = Creator;
+}
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+pub trait Lookup<K: Key>: Cache {
+    // TODO: maybe an exists method?
+    fn lookup(&self, key: &K) -> Result<CacheEntry<K::Result, Self::CacheEntryMeta>, Self::Err>;
+}
+
+pub trait Store<K: Key>: Cache {
+    fn store(&mut self, obj: &K::Result, key: &K) -> Result<Self::CacheEntryMeta, Self::Err>;
+    fn mark_absent(&mut self, key: &K) -> Result<Self::CacheEntryMeta, Self::Err>;
+}
+
+// FIXME: One they are stabilized, use a trait alias here
+pub trait CanCache<K: Key>: Lookup<K> + Store<K> {}
+
+impl<K: Key, C: Cache> CanCache<K> for C where C: Store<K> + Lookup<K> {}
+
+/// Struct modelling the result of some GDCF request
+#[derive(Debug, PartialEq, Clone)]
 pub enum CacheEntry<T, Meta: CacheEntryMeta> {
     /// Variant to return if there was no entry at all in the cache regarding a specific request,
     /// meaning the request hasn't been done yet ever
     Missing,
-
-    /// Variant indicating that the there was no entry at all in the cache regarding a specific
-    /// request, but it could be deduced from the context that a request that should have caused an
-    /// entry has already been made.
-    DeducedAbsent,
 
     /// Variant indicating that a request was already made previously, but the server indicated
     /// returned an empty response
@@ -47,7 +66,6 @@ impl<T: Display, Meta: CacheEntryMeta + Display> Display for CacheEntry<T, Meta>
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             CacheEntry::Missing => write!(f, "Cache entry missing"),
-            CacheEntry::DeducedAbsent => write!(f, "Cache entry deduced missing due to server sided data inconsistency"),
             CacheEntry::MarkedAbsent(meta) => write!(f, "{} marked as missing due to empty server response", meta),
             CacheEntry::Cached(object, meta) => write!(f, "Cached {}, {}", object, meta),
         }
@@ -55,18 +73,9 @@ impl<T: Display, Meta: CacheEntryMeta + Display> Display for CacheEntry<T, Meta>
 }
 
 impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
-    pub fn new(object: T, metadata: Meta) -> Self {
-        CacheEntry::Cached(object, metadata)
-    }
-
-    pub fn absent(metadata: Meta) -> Self {
-        CacheEntry::MarkedAbsent(metadata)
-    }
-
     pub fn is_expired(&self) -> bool {
         match self {
             CacheEntry::Missing => true,
-            CacheEntry::DeducedAbsent => false,
             CacheEntry::MarkedAbsent(meta) | CacheEntry::Cached(_, meta) => meta.is_expired(),
         }
     }
@@ -81,7 +90,6 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> CacheEntry<U, Meta> {
         match self {
             CacheEntry::Missing => CacheEntry::Missing,
-            CacheEntry::DeducedAbsent => CacheEntry::DeducedAbsent,
             CacheEntry::MarkedAbsent(absent_meta) => CacheEntry::MarkedAbsent(absent_meta),
             CacheEntry::Cached(object, meta) => CacheEntry::Cached(f(object), meta),
         }
@@ -89,17 +97,6 @@ impl<T, Meta: CacheEntryMeta> CacheEntry<T, Meta> {
 
     pub(crate) fn map_empty<U>(self) -> CacheEntry<U, Meta> {
         self.map(|_| panic!("CacheEntry::map_empty called on `Cached` variant"))
-    }
-}
-
-impl<T, Meta: CacheEntryMeta> Into<Option<T>> for CacheEntry<T, Meta> {
-    fn into(self) -> Option<T> {
-        match self {
-            CacheEntry::Missing => None,
-            CacheEntry::DeducedAbsent => None,
-            CacheEntry::MarkedAbsent(_) => None,
-            CacheEntry::Cached(cached, _) => Some(cached),
-        }
     }
 }
 

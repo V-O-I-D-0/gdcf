@@ -1,7 +1,7 @@
 use crate::{
     api::request::{LevelRequest, LevelRequestType, LevelsRequest, Request, SearchFilters, UserRequest},
-    cache::{Cache, Lookup},
-    upgrade::Upgradable,
+    cache::{Cache, CacheEntry, CreatorKey, Lookup, NewgroundsSongKey},
+    upgrade::{Upgradable, UpgradeError, UpgradeQuery},
 };
 use gdcf_model::{
     level::{Level, PartialLevel},
@@ -9,24 +9,40 @@ use gdcf_model::{
     user::{Creator, User},
 };
 
-impl<C: Cache, Song, User> Upgradable<C, Level<Song, User>> for PartialLevel<Song, User> {
+impl<Song, User> Upgradable<Level<Song, User>> for PartialLevel<Song, User> {
     type From = PartialLevel<Option<u64>, u64>;
+    type LookupKey = LevelRequest;
     type Request = LevelRequest;
     type Upgrade = Level<Option<u64>, u64>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        Some(self.level_id.into())
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        query_upgrade!(
+            cache,
+            LevelRequest::new(self.level_id),
+            LevelRequest::new(self.level_id),
+            ignored_cached
+        )
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        None
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        _cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<Level<Option<u64>, u64>, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(user)) => Ok(UpgradeQuery::One(None, Some(user))),
+            (Some(CacheEntry::Cached(user, _)), _) => Ok(UpgradeQuery::One(None, Some(user))),
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
     }
 
-    fn lookup_upgrade(&self, _: &C, request_result: Level<Option<u64>, u64>) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(request_result)
-    }
+    fn upgrade<State>(self, upgrade: UpgradeQuery<State, Self::Upgrade>) -> (Level<Song, User>, UpgradeQuery<State, Self::From>) {
+        let upgrade = upgrade.one().1.unwrap();
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (Level<Song, User>, Self::From) {
         let (partial_level, song) = change_partial_level_song(self, ());
         let (partial_level, user) = change_partial_level_user(partial_level, ());
 
@@ -36,10 +52,15 @@ impl<C: Cache, Song, User> Upgradable<C, Level<Song, User>> for PartialLevel<Son
         let partial_level = change_partial_level_user(partial_level, creator_id).0;
         let partial_level = change_partial_level_song(partial_level, song_id).0;
 
-        (level, partial_level)
+        (level, UpgradeQuery::One(None, Some(partial_level)))
     }
 
-    fn downgrade(upgraded: Level<Song, User>, downgrade: Self::From) -> (Self, Self::Upgrade) {
+    fn downgrade<State>(
+        upgraded: Level<Song, User>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let downgrade = downgrade.one().1.unwrap();
+
         let (level, song) = change_level_song(upgraded, ());
         let (level, creator) = change_level_user(level, ());
 
@@ -49,211 +70,334 @@ impl<C: Cache, Song, User> Upgradable<C, Level<Song, User>> for PartialLevel<Son
         let level = change_level_user(level, creator_id).0;
         let level = change_level_song(level, song_id).0;
 
-        (partial_level, level)
+        (partial_level, UpgradeQuery::One(None, Some(level)))
     }
 }
 
-impl<C: Cache> Upgradable<C, Level<Option<NewgroundsSong>, u64>> for Level<Option<u64>, u64>
-where
-    C: Lookup<NewgroundsSong>,
-{
+impl<User> Upgradable<Level<Option<NewgroundsSong>, User>> for Level<Option<u64>, User> {
     type From = Option<u64>;
+    type LookupKey = NewgroundsSongKey;
     type Request = LevelsRequest;
     type Upgrade = Option<NewgroundsSong>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
         match self.base.custom_song {
             Some(song_id) =>
-                Some(
+                query_upgrade_option!(
+                    cache,
+                    NewgroundsSongKey(song_id),
                     LevelsRequest::default()
                         .filter(SearchFilters::default().custom_song(song_id))
                         .request_type(LevelRequestType::MostLiked),
+                    ignored_cached
                 ),
-            None => None,
+            None => Ok(UpgradeQuery::One(None, Some(None))),
         }
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<<Self::Request as Request>::Result, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(newgrounds_song)) => Ok(UpgradeQuery::One(None, Some(newgrounds_song))),
+            (Some(_), _) =>
+                match cache.lookup(&NewgroundsSongKey(self.base.custom_song.unwrap()))? {
+                    CacheEntry::Cached(song, _) => Ok(UpgradeQuery::One(None, Some(Some(song)))),
+                    _ => Ok(UpgradeQuery::One(None, Some(None))),
+                },
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
     }
 
-    fn lookup_upgrade(&self, cache: &C, _: <LevelsRequest as Request>::Result) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(match self.base.custom_song {
-            Some(song_id) => cache.lookup(song_id)?.into(),
-            None => None,
-        })
+    fn upgrade<State>(
+        self,
+        upgrade: UpgradeQuery<State, Self::Upgrade>,
+    ) -> (Level<Option<NewgroundsSong>, User>, UpgradeQuery<State, Self::From>) {
+        let (level, old_song) = change_level_song(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(old_song)))
     }
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (Level<Option<NewgroundsSong>, u64>, Self::From) {
-        change_level_song(self, upgrade)
-    }
+    fn downgrade<State>(
+        upgraded: Level<Option<NewgroundsSong>, User>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, new_song) = change_level_song(upgraded, downgrade.one().1.unwrap());
 
-    fn downgrade(upgraded: Level<Option<NewgroundsSong>, u64>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_level_song(upgraded, downgrade)
+        (level, UpgradeQuery::One(None, Some(new_song)))
     }
 }
 
-impl<C: Cache + Lookup<NewgroundsSong>> Upgradable<C, PartialLevel<Option<NewgroundsSong>, u64>> for PartialLevel<Option<u64>, u64> {
+impl<User> Upgradable<PartialLevel<Option<NewgroundsSong>, User>> for PartialLevel<Option<u64>, User> {
     type From = Option<u64>;
+    type LookupKey = NewgroundsSongKey;
     type Request = LevelsRequest;
     type Upgrade = Option<NewgroundsSong>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        self.custom_song.map(|song_id| {
-            LevelsRequest::default()
-                .filter(SearchFilters::default().custom_song(song_id))
-                .request_type(LevelRequestType::MostLiked)
-        })
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        match self.custom_song {
+            Some(song_id) =>
+                query_upgrade_option!(
+                    cache,
+                    NewgroundsSongKey(song_id),
+                    LevelsRequest::default()
+                        .filter(SearchFilters::default().custom_song(song_id))
+                        .request_type(LevelRequestType::MostLiked),
+                    ignored_cached
+                ),
+            None => Ok(UpgradeQuery::One(None, Some(None))),
+        }
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<<Self::Request as Request>::Result, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(newgrounds_song)) => Ok(UpgradeQuery::One(None, Some(newgrounds_song))),
+            (Some(_), _) =>
+                match cache.lookup(&NewgroundsSongKey(self.custom_song.unwrap()))? {
+                    CacheEntry::Cached(song, _) => Ok(UpgradeQuery::One(None, Some(Some(song)))),
+                    _ => Ok(UpgradeQuery::One(None, Some(None))),
+                },
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
     }
 
-    fn lookup_upgrade(&self, cache: &C, _: <LevelsRequest as Request>::Result) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(match self.custom_song {
-            Some(song_id) => cache.lookup(song_id)?.into(),
-            None => None,
-        })
+    fn upgrade<State>(
+        self,
+        upgrade: UpgradeQuery<State, Self::Upgrade>,
+    ) -> (PartialLevel<Option<NewgroundsSong>, User>, UpgradeQuery<State, Self::From>) {
+        let (level, old_song) = change_partial_level_song(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(old_song)))
     }
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (PartialLevel<Option<NewgroundsSong>, u64>, Self::From) {
-        change_partial_level_song(self, upgrade)
-    }
+    fn downgrade<State>(
+        upgraded: PartialLevel<Option<NewgroundsSong>, User>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, new_song) = change_partial_level_song(upgraded, downgrade.one().1.unwrap());
 
-    fn downgrade(upgraded: PartialLevel<Option<NewgroundsSong>, u64>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_partial_level_song(upgraded, downgrade)
+        (level, UpgradeQuery::One(None, Some(new_song)))
     }
 }
 
-impl<C, Song> Upgradable<C, Level<Song, Option<Creator>>> for Level<Song, u64>
-where
-    C: Cache + Lookup<Creator>,
-{
+impl<Song> Upgradable<Level<Song, Option<Creator>>> for Level<Song, u64> {
     type From = u64;
+    type LookupKey = CreatorKey;
     type Request = LevelsRequest;
     type Upgrade = Option<Creator>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        Some(
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        query_upgrade_option!(
+            cache,
+            CreatorKey(self.base.creator),
             LevelsRequest::default()
                 .search(self.base.creator.to_string())
                 .request_type(LevelRequestType::User),
+            ignored_cached
         )
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<<Self::Request as Request>::Result, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(creator)) => Ok(UpgradeQuery::One(None, Some(creator))),
+            (Some(_), _) =>
+                match cache.lookup(&CreatorKey(self.base.creator))? {
+                    CacheEntry::Cached(creator, _) => Ok(UpgradeQuery::One(None, Some(Some(creator)))),
+                    _ => Ok(UpgradeQuery::One(None, Some(None))),
+                },
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
     }
 
-    fn lookup_upgrade(&self, cache: &C, _: Vec<PartialLevel<Option<u64>, u64>>) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(cache.lookup(self.base.creator)?.into())
+    fn upgrade<State>(
+        self,
+        upgrade: UpgradeQuery<State, Self::Upgrade>,
+    ) -> (Level<Song, Option<Creator>>, UpgradeQuery<State, Self::From>) {
+        let (level, old_creator) = change_level_user(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(old_creator)))
     }
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (Level<Song, Option<Creator>>, Self::From) {
-        change_level_user(self, upgrade)
-    }
+    fn downgrade<State>(
+        upgraded: Level<Song, Option<Creator>>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, new_creator) = change_level_user(upgraded, downgrade.one().1.unwrap());
 
-    fn downgrade(upgraded: Level<Song, Option<Creator>>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_level_user(upgraded, downgrade)
+        (level, UpgradeQuery::One(None, Some(new_creator)))
     }
 }
 
-impl<C, Song> Upgradable<C, PartialLevel<Song, Option<Creator>>> for PartialLevel<Song, u64>
-where
-    C: Cache + Lookup<Creator>,
-{
+impl<Song> Upgradable<PartialLevel<Song, Option<Creator>>> for PartialLevel<Song, u64> {
     type From = u64;
+    type LookupKey = CreatorKey;
     type Request = LevelsRequest;
     type Upgrade = Option<Creator>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        Some(
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        query_upgrade_option!(
+            cache,
+            CreatorKey(self.creator),
             LevelsRequest::default()
                 .search(self.creator.to_string())
                 .request_type(LevelRequestType::User),
+            ignored_cached
         )
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
-    }
-
-    fn lookup_upgrade(&self, cache: &C, _: Vec<PartialLevel<Option<u64>, u64>>) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(cache.lookup(self.creator)?.into())
-    }
-
-    fn upgrade(self, upgrade: Self::Upgrade) -> (PartialLevel<Song, Option<Creator>>, Self::From) {
-        change_partial_level_user(self, upgrade)
-    }
-
-    fn downgrade(upgraded: PartialLevel<Song, Option<Creator>>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_partial_level_user(upgraded, downgrade)
-    }
-}
-
-impl<C: Cache, Song> Upgradable<C, PartialLevel<Song, Option<User>>> for PartialLevel<Song, Option<Creator>> {
-    type From = Option<Creator>;
-    type Request = UserRequest;
-    type Upgrade = Option<User>;
-
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        match &self.creator {
-            Some(creator) =>
-                match creator.account_id {
-                    Some(account_id) => Some(account_id.into()),
-                    _ => None,
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<<Self::Request as Request>::Result, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(creator)) => Ok(UpgradeQuery::One(None, Some(creator))),
+            (Some(_), _) =>
+                match cache.lookup(&CreatorKey(self.creator))? {
+                    CacheEntry::Cached(creator, _) => Ok(UpgradeQuery::One(None, Some(Some(creator)))),
+                    _ => Ok(UpgradeQuery::One(None, Some(None))),
                 },
-            _ => None,
+            _ => Err(UpgradeError::UpgradeFailed),
         }
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
+    fn upgrade<State>(
+        self,
+        upgrade: UpgradeQuery<State, Self::Upgrade>,
+    ) -> (PartialLevel<Song, Option<Creator>>, UpgradeQuery<State, Self::From>) {
+        let (level, old_creator) = change_partial_level_user(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(old_creator)))
     }
 
-    fn lookup_upgrade(&self, _: &C, request_result: User) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(Some(request_result))
-    }
+    fn downgrade<State>(
+        upgraded: PartialLevel<Song, Option<Creator>>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, new_creator) = change_partial_level_user(upgraded, downgrade.one().1.unwrap());
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (PartialLevel<Song, Option<User>>, Self::From) {
-        change_partial_level_user(self, upgrade)
-    }
-
-    fn downgrade(upgraded: PartialLevel<Song, Option<User>>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_partial_level_user(upgraded, downgrade)
+        (level, UpgradeQuery::One(None, Some(new_creator)))
     }
 }
-impl<C: Cache, Song> Upgradable<C, Level<Song, Option<User>>> for Level<Song, Option<Creator>> {
+
+impl<Song> Upgradable<Level<Song, Option<User>>> for Level<Song, Option<Creator>> {
     type From = Option<Creator>;
+    type LookupKey = UserRequest;
     type Request = UserRequest;
     type Upgrade = Option<User>;
 
-    fn upgrade_request(&self) -> Option<Self::Request> {
-        match &self.base.creator {
-            Some(creator) =>
-                match creator.account_id {
-                    Some(account_id) => Some(account_id.into()),
-                    _ => None,
-                },
-            _ => None,
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        match self.base.creator.as_ref().and_then(|creator| creator.account_id) {
+            Some(account_id) => query_upgrade_option!(cache, UserRequest::new(account_id), UserRequest::new(account_id), ignored_cached),
+            None => Ok(UpgradeQuery::One(None, Some(None))),
         }
     }
 
-    fn default_upgrade() -> Option<Self::Upgrade> {
-        Some(None)
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        _cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<User, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(user)) => Ok(UpgradeQuery::One(None, Some(user))),
+            (Some(CacheEntry::Cached(user, _)), _) => Ok(UpgradeQuery::One(None, Some(Some(user)))),
+            (Some(_), _) => Ok(UpgradeQuery::One(None, Some(None))),
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
     }
 
-    fn lookup_upgrade(&self, _: &C, request_result: User) -> Result<Self::Upgrade, <C as Cache>::Err> {
-        Ok(Some(request_result))
+    fn upgrade<State>(self, upgrade: UpgradeQuery<State, Self::Upgrade>) -> (Level<Song, Option<User>>, UpgradeQuery<State, Self::From>) {
+        let (level, creator) = change_level_user(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(creator)))
     }
 
-    fn upgrade(self, upgrade: Self::Upgrade) -> (Level<Song, Option<User>>, Self::From) {
-        change_level_user(self, upgrade)
+    fn downgrade<State>(
+        upgraded: Level<Song, Option<User>>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, user) = change_level_user(upgraded, downgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(user)))
+    }
+}
+
+impl<Song> Upgradable<PartialLevel<Song, Option<User>>> for PartialLevel<Song, Option<Creator>> {
+    type From = Option<Creator>;
+    type LookupKey = UserRequest;
+    type Request = UserRequest;
+    type Upgrade = Option<User>;
+
+    fn query_upgrade<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        cache: &C,
+        ignored_cached: bool,
+    ) -> Result<UpgradeQuery<Self::Request, Self::Upgrade>, UpgradeError<C::Err>> {
+        match self.creator.as_ref().and_then(|creator| creator.account_id) {
+            Some(account_id) => query_upgrade_option!(cache, UserRequest::new(account_id), UserRequest::new(account_id), ignored_cached),
+            None => Ok(UpgradeQuery::One(None, Some(None))),
+        }
     }
 
-    fn downgrade(upgraded: Level<Song, Option<User>>, downgrade: Self::From) -> (Self, Self::Upgrade) {
-        change_level_user(upgraded, downgrade)
+    fn process_query_result<C: Cache + Lookup<Self::LookupKey>>(
+        &self,
+        _cache: &C,
+        resolved_query: UpgradeQuery<CacheEntry<User, C::CacheEntryMeta>, Self::Upgrade>,
+    ) -> Result<UpgradeQuery<(), Self::Upgrade>, UpgradeError<C::Err>> {
+        match resolved_query.one() {
+            (None, Some(user)) => Ok(UpgradeQuery::One(None, Some(user))),
+            (Some(CacheEntry::Cached(user, _)), _) => Ok(UpgradeQuery::One(None, Some(Some(user)))),
+            (Some(_), _) => Ok(UpgradeQuery::One(None, Some(None))),
+            _ => Err(UpgradeError::UpgradeFailed),
+        }
+    }
+
+    fn upgrade<State>(
+        self,
+        upgrade: UpgradeQuery<State, Self::Upgrade>,
+    ) -> (PartialLevel<Song, Option<User>>, UpgradeQuery<State, Self::From>) {
+        let (level, creator) = change_partial_level_user(self, upgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(creator)))
+    }
+
+    fn downgrade<State>(
+        upgraded: PartialLevel<Song, Option<User>>,
+        downgrade: UpgradeQuery<State, Self::From>,
+    ) -> (Self, UpgradeQuery<State, Self::Upgrade>) {
+        let (level, user) = change_partial_level_user(upgraded, downgrade.one().1.unwrap());
+
+        (level, UpgradeQuery::One(None, Some(user)))
     }
 }
 

@@ -6,6 +6,7 @@ use diesel::{
     sql_types::{Int8, Nullable, Text},
     ExpressionMethods, Queryable,
 };
+use gdcf::api::request::UserRequest;
 use gdcf_model::user::{Color, ModLevel, User};
 
 impl<'a> Identifiable for &'a Wrapped<User> {
@@ -53,5 +54,5 @@ diesel_stuff! {
 
 meta_table!(profile_meta, account_id);
 
-store_simply!(User, profile, profile_meta, account_id);
-lookup_simply!(User, profile, profile_meta, account_id);
+store_simply!(UserRequest, profile, profile_meta, account_id);
+lookup_simply!(UserRequest, profile, profile_meta, account_id);

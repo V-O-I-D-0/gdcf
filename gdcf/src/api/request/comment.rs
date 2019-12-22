@@ -1,10 +1,11 @@
+//! Module containing request structs for retrieving profile/level comments
+
 use crate::api::request::{BaseRequest, PaginatableRequest, Request, GD_21};
 use gdcf_model::comment::{CommentUser, LevelComment, ProfileComment};
 use std::{
     fmt::{Display, Formatter},
     hash::{Hash, Hasher},
 };
-//use gdcf_model::level::{PartialLevel, Level};
 
 /// The different orderings that can be requested for level comments
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -24,10 +25,6 @@ pub enum SortMode {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LevelCommentsRequest {
-    /// Whether this [`LevelCommentsRequest`] request forces a cache refresh. This is not a HTTP
-    /// request field!
-    pub force_refresh: bool,
-
     /// The base request data
     pub base: BaseRequest,
 
@@ -71,14 +68,10 @@ impl LevelCommentsRequest {
 
     const_setter!(limit: u32);
 
-    pub const fn force_refresh(mut self) -> Self {
-        self.force_refresh = true;
-        self
-    }
+    const_setter!(page: u32);
 
     pub const fn new(level: u64) -> LevelCommentsRequest {
         LevelCommentsRequest {
-            force_refresh: false,
             level_id: level,
             base: GD_21,
             page: 0,
@@ -117,23 +110,11 @@ impl Hash for LevelCommentsRequest {
 
 impl Request for LevelCommentsRequest {
     type Result = Vec<LevelComment<Option<CommentUser>>>;
-
-    fn forces_refresh(&self) -> bool {
-        self.force_refresh
-    }
-
-    fn set_force_refresh(&mut self, force_refresh: bool) {
-        self.force_refresh = force_refresh
-    }
 }
 
 impl PaginatableRequest for LevelCommentsRequest {
     fn next(&mut self) {
         self.page += 1;
-    }
-
-    fn page(&mut self, page: u32) {
-        self.page = page;
     }
 }
 
@@ -145,10 +126,6 @@ impl Into<LevelCommentsRequest> for u64 {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileCommentsRequest {
-    /// Whether this [`ProfileCommentsRequest`] request forces a cache refresh. This is not a HTTP
-    /// request field!
-    pub force_refresh: bool,
-
     /// The base request data
     pub base: BaseRequest,
 
@@ -178,14 +155,8 @@ impl ProfileCommentsRequest {
 
     const_setter!(account_id: u64);
 
-    pub const fn force_refresh(mut self) -> Self {
-        self.force_refresh = true;
-        self
-    }
-
     pub const fn new(account: u64) -> ProfileCommentsRequest {
         ProfileCommentsRequest {
-            force_refresh: false,
             account_id: account,
             base: GD_21,
             page: 0,
@@ -210,22 +181,10 @@ impl Hash for ProfileCommentsRequest {
 
 impl Request for ProfileCommentsRequest {
     type Result = Vec<ProfileComment>;
-
-    fn forces_refresh(&self) -> bool {
-        self.force_refresh
-    }
-
-    fn set_force_refresh(&mut self, force_refresh: bool) {
-        self.force_refresh = force_refresh
-    }
 }
 
 impl PaginatableRequest for ProfileCommentsRequest {
     fn next(&mut self) {
         self.page += 1;
-    }
-
-    fn page(&mut self, page: u32) {
-        self.page = page;
     }
 }

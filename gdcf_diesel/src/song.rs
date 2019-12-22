@@ -6,6 +6,7 @@ use diesel::{
     sql_types::*,
     ExpressionMethods,
 };
+use gdcf::cache::NewgroundsSongKey;
 use gdcf_model::song::NewgroundsSong;
 
 impl<'a> Identifiable for &'a Wrapped<NewgroundsSong> {
@@ -32,5 +33,5 @@ diesel_stuff! {
 
 meta_table!(song_meta, song_id);
 
-store_simply!(NewgroundsSong, newgrounds_song, song_meta, song_id);
-lookup_simply!(NewgroundsSong, newgrounds_song, song_meta, song_id);
+store_simply!(NewgroundsSongKey, newgrounds_song, song_meta, song_id);
+lookup_simply!(NewgroundsSongKey, newgrounds_song, song_meta, song_id);
